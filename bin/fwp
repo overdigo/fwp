@@ -1,0 +1,115 @@
+#!/usr/bin/env bash
+# ==============================================================================
+# fwp — FrankenWP CLI entrypoint
+# ==============================================================================
+set -euo pipefail
+
+FWP_HOME="${FWP_HOME:-/opt/fwp}"
+FWP_CONFIG="${FWP_CONFIG:-/etc/fwp/fwp.conf}"
+[[ -f "${FWP_CONFIG}" ]] && source "${FWP_CONFIG}"
+
+for mod in log os utils banner; do
+  source "${FWP_HOME}/src/core/${mod}.sh"
+done
+
+VERSION="0.1.0"
+
+show_help() {
+  echo -e "
+${BOLD}Usage:${NC} fwp <command> [subcommand] [args] [options]
+
+${BOLD}Site Commands:${NC}
+  ${CYAN}fwp site create <domain>${NC}    Create a new WordPress site
+    ${YELLOW}--locale=en_US${NC}            WordPress locale (default: en_US)
+    ${YELLOW}--title=\"My Site\"${NC}         WordPress site title
+    ${YELLOW}--admin-email=email${NC}       Admin email
+    ${YELLOW}--admin-user=user${NC}         Admin username (default: admin)
+    ${YELLOW}--skip-redis${NC}              Skip Redis Object Cache setup
+    ${YELLOW}--skip-ssl${NC}                Skip HTTPS (local dev only)
+  ${CYAN}fwp site delete <domain>${NC}    Remove site [--no-prompt]
+  ${CYAN}fwp site enable <domain>${NC}    Re-enable a disabled site
+  ${CYAN}fwp site disable <domain>${NC}   Disable a site (files preserved)
+  ${CYAN}fwp site list${NC}               List all sites
+  ${CYAN}fwp site info <domain>${NC}      Show full site details
+
+${BOLD}Stack Commands:${NC}
+  ${CYAN}fwp stack status${NC}           Services + kernel tuning status
+  ${CYAN}fwp stack upgrade${NC}          Upgrade FrankenPHP to latest release
+
+${BOLD}Firewall Commands:${NC}
+  ${CYAN}fwp firewall status${NC}        UFW + Fail2Ban status
+  ${CYAN}fwp firewall allow <port>${NC}   Allow a custom port (e.g., 8080/tcp)
+  ${CYAN}fwp firewall deny <port>${NC}    Block a port
+
+${BOLD}General:${NC}
+  ${CYAN}fwp version${NC}                Show version info
+  ${CYAN}fwp help${NC}                   Show this help
+
+${BOLD}Examples:${NC}
+  sudo fwp site create example.com
+  sudo fwp site create dev.local --skip-ssl --locale=pt_BR --title=\"Dev Site\"
+  sudo fwp site list
+  sudo fwp site info example.com
+  sudo fwp site delete example.com
+  sudo fwp firewall allow 8080/tcp
+  sudo fwp stack upgrade
+"
+}
+
+cmd_version() {
+  echo "fwp ${VERSION}"
+  echo "FrankenPHP: $(frankenphp version 2>&1 | head -1 || echo 'not installed')"
+  echo "WP-CLI:     $(wp --version --allow-root 2>/dev/null || echo 'not installed')"
+  echo "MariaDB:    $(mysql --version 2>/dev/null | head -1 || echo 'not installed')"
+}
+
+cmd_site() {
+  local sub="${1:-}"; shift || true
+  case "${sub}" in
+    create)  source "${FWP_HOME}/src/site/create.sh";  site_create "$@" ;;
+    delete)  source "${FWP_HOME}/src/site/delete.sh";  site_delete "$@" ;;
+    enable)  source "${FWP_HOME}/src/site/enable.sh";  site_enable "$@" ;;
+    disable) source "${FWP_HOME}/src/site/disable.sh"; site_disable "$@" ;;
+    list)    source "${FWP_HOME}/src/site/list.sh";    site_list "$@" ;;
+    info)    source "${FWP_HOME}/src/site/info.sh";    site_info "$@" ;;
+    *)       log_error "Unknown subcommand: '${sub}'"; show_help; exit 1 ;;
+  esac
+}
+
+cmd_stack() {
+  local sub="${1:-status}"; shift || true
+  for mod in frankenphp mariadb redis kernel; do
+    source "${FWP_HOME}/src/stack/${mod}.sh"
+  done
+  case "${sub}" in
+    status)  stack_status ;;
+    upgrade) stack_frankenphp_upgrade ;;
+    *)       log_error "Unknown subcommand: '${sub}'"; exit 1 ;;
+  esac
+}
+
+cmd_firewall() {
+  local sub="${1:-status}"; shift || true
+  source "${FWP_HOME}/src/stack/firewall.sh"
+  case "${sub}" in
+    status) stack_firewall_status ;;
+    allow)  stack_firewall_allow "$@" ;;
+    deny)   stack_firewall_deny "$@" ;;
+    *)      log_error "Unknown subcommand: '${sub}'"; exit 1 ;;
+  esac
+}
+
+main() {
+  [[ "${EUID}" -ne 0 ]] && log_fatal "Please run as root:  sudo fwp $*"
+  local cmd="${1:-}"; shift || true
+  case "${cmd}" in
+    site)              cmd_site "$@" ;;
+    stack)             cmd_stack "$@" ;;
+    firewall)          cmd_firewall "$@" ;;
+    version|--version) cmd_version ;;
+    help|--help|-h|"") show_help ;;
+    *) log_error "Unknown command: '${cmd}'"; show_help; exit 1 ;;
+  esac
+}
+
+main "$@"
