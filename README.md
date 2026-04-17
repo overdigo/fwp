@@ -36,6 +36,9 @@ sudo fwp site create example.com
 | **Let's Encrypt HTTPS** | Automatic via FrankenPHP / Caddy |
 | **HTTP/3 + QUIC** | Enabled by default (`443/tcp` + `443/udp`) |
 | **Zstandard compression** | `zstd` → `br` → `gzip` in Caddyfile |
+| **Image Optimization** | Automatic AVIF / WebP negotiation via `Accept` header |
+| **Security Headers** | HSTS, CSP, XSS protection, hidden server signatures |
+| **Rate Limiting** | Anti-bruteforce for wp-login, XML-RPC block, API limits |
 | **Kernel tuning** | BBR, sysctl, open file limits |
 | **UFW + Fail2Ban** | Hardened rules |
 
