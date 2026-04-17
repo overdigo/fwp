@@ -120,15 +120,9 @@ Applied automatically during `install.sh`:
 ALLOW OUT  all
 DENY  IN   all (default)
 LIMIT IN   22/tcp     SSH (rate-limited — max 6 conn/30s)
-ALLOW IN   53         DNS
 ALLOW IN   80/tcp     HTTP
 ALLOW IN   443/tcp    HTTPS / TLS
 ALLOW IN   443/udp    HTTP/3 QUIC  ← required for FrankenPHP HTTP/3
-ALLOW IN   123        NTP
 ```
 
 Fail2Ban: 5 max SSH retries per 5-minute window → 1-hour ban. Action: `ufw`.
-
-## Development
-
-See [AGENTS.md](./AGENTS.md) for architecture decisions, module contracts, and contribution guide.
