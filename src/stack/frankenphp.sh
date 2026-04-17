@@ -48,9 +48,10 @@ stack_setup_global_caddyfile() {
     admin off
 }
 
-# Import all enabled site configs
-import /etc/frankenphp/sites-enabled/*.conf
+# Import all enabled site configs (using glob that doesn't fail if empty)
+import sites-enabled/*.conf
 CADDY
+  touch "${CADDY_CONFIG_DIR}/sites-enabled/.placeholder"
   log_success "Global Caddyfile written: ${CADDY_CONFIG_DIR}/Caddyfile"
 }
 
@@ -92,13 +93,32 @@ stack_status() {
   echo "  ─────────────────────────────────────────────"
   for svc in frankenphp mysql redis-server; do
     if systemctl is-active --quiet "${svc}" 2>/dev/null; then
-      echo -e "  ${GREEN}●${NC} ${svc}  ${GREEN}(active)${NC}"
+      echo -e "  ${GREEN}●${NC} ${svc:-service}  ${GREEN}(active)${NC}"
     elif systemctl list-unit-files --quiet "${svc}.service" &>/dev/null; then
-      echo -e "  ${RED}●${NC} ${svc}  ${RED}(inactive)${NC}"
+      echo -e "  ${RED}●${NC} ${svc:-service}  ${RED}(inactive)${NC}"
     else
-      echo -e "  ${YELLOW}○${NC} ${svc}  ${YELLOW}(not installed)${NC}"
+      echo -e "  ${YELLOW}○${NC} ${svc:-service}  ${YELLOW}(not installed)${NC}"
     fi
   done
+
+  echo ""
+  echo -e "  ${BOLD}Network Listeners${NC}"
+  echo "  ─────────────────────────────────────────────"
+  local ports=(80 443 3306 6379)
+  for port in "${ports[@]}"; do
+    if ss -tln | grep -q ":${port} "; then
+      echo -e "  ${GREEN}✓${NC} Port ${port} is listening"
+    else
+      echo -e "  ${RED}✗${NC} Port ${port} is NOT listening"
+    fi
+  done
+
+  if ! ss -tln | grep -qE ":80 |:443 "; then
+    echo ""
+    echo -e "  ${YELLOW}Tip: FrankenPHP is active but ports 80/443 are closed.${NC}"
+    echo -e "  Check logs: ${BOLD}journalctl -u frankenphp --no-pager -n 20${NC}"
+  fi
+
   source "${FWP_HOME}/src/stack/kernel.sh"
   stack_kernel_status
 }
