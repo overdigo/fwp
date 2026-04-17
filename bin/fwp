@@ -26,6 +26,7 @@ ${BOLD}Site Commands:${NC}
     ${YELLOW}--admin-user=user${NC}         Admin username (default: admin)
     ${YELLOW}--skip-redis${NC}              Skip Redis Object Cache setup
     ${YELLOW}--skip-ssl${NC}                Skip HTTPS (local dev only)
+    ${YELLOW}--dev${NC}                     Dev mode: self-signed SSL + test data import
   ${CYAN}fwp site delete <domain>${NC}    Remove site [--no-prompt]
   ${CYAN}fwp site enable <domain>${NC}    Re-enable a disabled site
   ${CYAN}fwp site disable <domain>${NC}   Disable a site (files preserved)

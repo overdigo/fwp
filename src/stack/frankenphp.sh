@@ -68,6 +68,8 @@ Type=notify
 User=www-data
 Group=www-data
 WorkingDirectory=/etc/frankenphp
+Environment=XDG_DATA_HOME=/var/lib/frankenphp/data
+Environment=XDG_CONFIG_HOME=/var/lib/frankenphp/config
 ExecStart=/usr/local/bin/frankenphp run --config /etc/frankenphp/Caddyfile
 ExecReload=/bin/kill -USR1 $MAINPID
 TimeoutStopSec=5s
@@ -82,6 +84,8 @@ RestartSec=5s
 [Install]
 WantedBy=multi-user.target
 SERVICE
+  mkdir -p /var/lib/frankenphp/data /var/lib/frankenphp/config
+  chown -R www-data:www-data /var/lib/frankenphp
   systemctl daemon-reload
   systemctl enable frankenphp
   log_success "frankenphp.service installed and enabled"

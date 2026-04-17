@@ -16,6 +16,7 @@ site_create() {
       --admin-user=*)  admin_user="${1#*=}";   shift ;;
       --skip-redis)    skip_redis=true;        shift ;;
       --skip-ssl)      skip_ssl=true;          shift ;;
+      --dev)           is_dev=true;            shift ;;
       --www)           www_pref="www";         shift ;;
       --no-www)        www_pref="non-www";     shift ;;
       --skip-www-prompt) www_pref="none";      shift ;;
@@ -116,6 +117,21 @@ site_create() {
     "${admin_user}" "${admin_pass}" "${admin_email}" \
     "${skip_redis}" "${skip_ssl}"
 
+  if [[ "${is_dev:-false}" == "true" ]]; then
+    log_step "Extra: Importing WordPress Theme Unit Test data..."
+    wp plugin install wordpress-importer --activate --path="${webroot}" --allow-root
+    
+    local xml_file="/tmp/themeunittestdata.xml"
+    if [[ ! -f "${xml_file}" ]]; then
+      log_info "Downloading test data..."
+      curl -sSL -o "${xml_file}" https://raw.githubusercontent.com/WPTT/theme-test-data/master/themeunittestdata.wordpress.xml
+    fi
+    
+    log_info "Importing XML (this may take a minute)..."
+    wp import "${xml_file}" --authors=create --path="${webroot}" --allow-root
+    log_success "Test data imported"
+  fi
+
   _site_print_summary "${domain}" "${admin_user}" "${admin_pass}" \
     "${admin_email}" "${db_name}" "${db_user}" "${db_pass}" "${skip_ssl}"
 }
@@ -127,6 +143,14 @@ _site_generate_caddyfile() {
   
   local proto="https"
   [[ "${skip_ssl}" == "true" ]] && proto="http"
+
+  local tls_block=""
+  # Detect local/dev domains or --dev flag to use internal self-signed SSL
+  if [[ "${skip_ssl}" == "false" ]]; then
+    if [[ "${is_dev:-false}" == "true" ]] || [[ "${domain}" =~ \.(test|local|dev|example)$ ]] || [[ "${domain}" == "localhost" ]]; then
+      tls_block="    tls internal"
+    fi
+  fi
 
   local redir_block=""
   local main_host="${proto}://${domain}"
@@ -149,6 +173,7 @@ _site_generate_caddyfile() {
 ${redir_block}
 ${main_host} {
     root * ${webroot}
+    ${tls_block}
 
     # FrankenPHP worker — handles PHP via worker mode for best performance
     php_server
@@ -196,57 +221,6 @@ ${main_host} {
     respond @blocked 403
     respond @wp_xmlrpc   403
     respond @author_enum 403
-
-    # -------------------------------------------------------
-    # Rate limits
-    # -------------------------------------------------------
-    rate_limit @wp_login {
-        zone login_attempts {
-            key    {remote_host}
-            events 5
-            window 1m
-        }
-    }
-
-    rate_limit @wp_jwt {
-        zone jwt_auth {
-            key    {remote_host}
-            events 10
-            window 1m
-        }
-    }
-
-    rate_limit @wp_users_enum {
-        zone users_enum {
-            key    {remote_host}
-            events 5
-            window 1m
-        }
-    }
-
-    rate_limit @wp_comments {
-        zone comment_flood {
-            key    {remote_host}
-            events 10
-            window 1m
-        }
-    }
-
-    rate_limit @wp_rest_write {
-        zone rest_write {
-            key    {remote_host}
-            events 20
-            window 1m
-        }
-    }
-
-    rate_limit @wp_search {
-        zone search_flood {
-            key    {remote_host}
-            events 15
-            window 1m
-        }
-    }
 
     header {
         Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
