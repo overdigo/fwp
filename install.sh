@@ -2,14 +2,14 @@
 # ==============================================================================
 # FrankenWP — Bootstrap Installer
 # Usage:
-#   wget -qO fwp https://raw.githubusercontent.com/YOUR_USER/frankenwp/main/install.sh
+#   wget -qO fwp https://raw.githubusercontent.com/overdigo/fwp/main/install.sh
 #   sudo bash fwp
 # Supported: Debian 12/13 | Ubuntu 24.04 / 26.04
 # ==============================================================================
 set -euo pipefail
 
 FWP_VERSION="0.1.0"
-FWP_REPO_RAW="https://raw.githubusercontent.com/YOUR_USER/frankenwp/main"
+FWP_REPO_RAW="https://raw.githubusercontent.com/overdigo/fwp/main"
 FWP_HOME="/opt/fwp"
 FWP_BIN="/usr/local/bin/fwp"
 FWP_CONFIG_DIR="/etc/fwp"
