@@ -116,23 +116,6 @@ site_create() {
     "${admin_user}" "${admin_pass}" "${admin_email}" \
     "${skip_redis}" "${skip_ssl}"
 
-  local creds_file="/var/www/${domain}/credentials.txt"
-  cat > "${creds_file}" << CREDS
-WordPress Site: ${domain}
-────────────────────────────────────────────────
-Admin URL:   https://${domain}/wp-admin
-Username:    ${admin_user}
-Password:    ${admin_pass}
-Email:       ${admin_email}
-
-Database:    ${db_name}
-DB User:     ${db_user}
-DB Password: ${db_pass}
-────────────────────────────────────────────────
-Please keep this file secure or delete it after securing your passwords.
-CREDS
-  chmod 600 "${creds_file}"
-
   _site_print_summary "${domain}" "${admin_user}" "${admin_pass}" \
     "${admin_email}" "${db_name}" "${db_user}" "${db_pass}" "${skip_ssl}"
 }
@@ -358,7 +341,5 @@ _site_print_summary() {
   echo -e "  ${BOLD}Database:${NC}    ${db}"
   echo -e "  ${BOLD}DB User:${NC}     ${dbu}"
   echo -e "  ${BOLD}DB Pass:${NC}     ${dbp}"
-  echo ""
-  echo -e "  ${BOLD}Credentials saved:${NC} /var/www/${domain}/credentials.txt"
   echo ""
 }
