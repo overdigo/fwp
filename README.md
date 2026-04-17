@@ -17,7 +17,7 @@
 
 ```bash
 # 1 — Download and install the full stack
-wget -qO fwp https://raw.githubusercontent.com/overdigo/fwp/main/install.sh
+wget -qO fwp https://cdn.jsdelivr.net/gh/overdigo/fwp@main/install.sh
 sudo bash fwp
 
 # 2 — Spin up a WordPress site
