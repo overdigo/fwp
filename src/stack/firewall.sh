@@ -51,15 +51,6 @@ _firewall_apply_rules() {
   ufw allow 443/tcp comment 'HTTPS'
   ufw allow 443/udp comment 'HTTPS/3 QUIC'
 
-  # DNS and NTP
-  ufw allow 53 comment 'DNS'
-  ufw allow 123 comment 'NTP'
-
-  # Explicit Outbound (just in case default outgoing fails on some hosters)
-  ufw allow out 53 comment 'Outbound DNS'
-  ufw allow out 80/tcp comment 'Outbound HTTP'
-  ufw allow out 443/tcp comment 'Outbound HTTPS'
-
   ufw --force enable
 
   log_success "UFW enabled"
@@ -70,19 +61,14 @@ _firewall_print_summary() {
   echo ""
   echo -e "  ${BOLD}Active Firewall Rules${NC}"
   echo "  ────────────────────────────────────────────────"
-  echo -e "  ${GREEN}ALLOW OUT${NC}  all (default)"
-  echo -e "  ${GREEN}ALLOW OUT${NC}  53        (DNS)"
-  echo -e "  ${GREEN}ALLOW OUT${NC}  80/tcp    (HTTP)"
-  echo -e "  ${GREEN}ALLOW OUT${NC}  443/tcp   (HTTPS)"
+  echo -e "  ${GREEN}ALLOW OUT${NC}  all"
   echo -e "  ${RED}DENY  IN${NC}   all (default)"
   echo -e "  ${YELLOW}LIMIT IN${NC}   ${SSH_PORT}/tcp  (SSH, rate-limited)"
   [[ "${SSH_PORT}" != "22" ]] && \
     echo -e "  ${YELLOW}LIMIT IN${NC}   22/tcp    (SSH default, rate-limited)"
-  echo -e "  ${GREEN}ALLOW IN${NC}   53        (DNS)"
   echo -e "  ${GREEN}ALLOW IN${NC}   80/tcp    (HTTP)"
   echo -e "  ${GREEN}ALLOW IN${NC}   443/tcp   (HTTPS / TLS)"
   echo -e "  ${GREEN}ALLOW IN${NC}   443/udp   (HTTP/3 QUIC)  ← required for FrankenPHP"
-  echo -e "  ${GREEN}ALLOW IN${NC}   123       (NTP)"
   echo ""
 }
 
