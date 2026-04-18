@@ -39,10 +39,8 @@ stack_frankenphp_upgrade() {
 
 stack_setup_global_caddyfile() {
   local cpus; cpus=$(nproc)
-  local num_workers=$(( cpus * 2 ))
-  [[ $num_workers -lt 4 ]] && num_workers=4
-  local num_threads=$(( num_workers + 1 ))
-  local max_threads=$(( (cpus * 8) + 1 ))
+  local num_threads=$(( (cpus * 8) + 1 ))
+  local max_threads=$(( (cpus * 32) + 1 ))
   
   log_info "FrankenPHP Tuning: ${cpus} CPUs detected -> ${num_threads} initial / ${max_threads} max threads"
 

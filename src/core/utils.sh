@@ -5,6 +5,11 @@ _generate_password() {
   tr -dc 'A-Za-z0-9!@#%^&*' < /dev/urandom 2>/dev/null | head -c "${length}" || true
   echo
 }
+_generate_table_prefix() {
+  local prefix; prefix=$(tr -dc 'a-z' < /dev/urandom | head -c 1)
+  prefix+=$(tr -dc 'a-z0-9' < /dev/urandom | head -c 3)
+  echo "${prefix}_"
+}
 _generate_db_name() {
   echo "wp_${1//[.-]/_}" | cut -c1-64
 }

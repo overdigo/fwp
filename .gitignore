@@ -1,4 +1,11 @@
-*.md
+# Ignore log files
+*.log
+
+# Allow documentation models
 !README.md
-templates/
-tests/
+!hsts.md
+!tls.md
+
+# Allow test tools
+!tests/
+!tests/security_audit.sh

@@ -20,5 +20,9 @@ site_delete() {
   rm -rf "/var/www/${domain}"
   rm -f "/etc/cron.d/fwp-${domain//./-}"
   rm -f "/etc/fwp/sites/${domain}.conf"
+  
+  # Remove from /etc/hosts
+  sed -i "/127.0.0.1 ${domain} www.${domain}/d" /etc/hosts
+  
   log_success "Site '${domain}' removed."
 }

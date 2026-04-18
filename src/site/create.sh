@@ -4,7 +4,6 @@ site_create() {
   local domain="" locale="${FWP_DEFAULT_LOCALE:-en_US}"
   local title="My WordPress Site" admin_user="admwp" admin_email=""
   local skip_redis=false skip_ssl=false www_pref="" worker_mode=false
-  local is_dev=false
   local positional=()
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -98,14 +97,28 @@ site_create() {
   _site_generate_caddyfile "${domain}" "${webroot}" "${skip_ssl}" "${www_pref}" "${worker_mode}"
   _frankenphp_reload
 
+  # Add to /etc/hosts (Loopback) for internal communications
+  if ! grep -q " ${domain}$" /etc/hosts; then
+    echo "127.0.0.1 ${domain} www.${domain}" >> /etc/hosts
+    log_info "Added ${domain} to /etc/hosts"
+  fi
+
   log_step "6/8 Downloading WordPress..."
   wpcli_download_wordpress "${webroot}" "${locale}"
-  wpcli_create_config "${webroot}" "${db_name}" "${db_user}" "${db_pass}"
+  local db_prefix; db_prefix=$(_generate_table_prefix)
+  wpcli_create_config "${webroot}" "${db_name}" "${db_user}" "${db_pass}" "${db_prefix}"
+  
+  log_info "Setting WordPress memory limits..."
+  sudo -u www-data /usr/local/bin/wp config set WP_MEMORY_LIMIT 512M --path="${webroot}" > /dev/null 2>&1
+  sudo -u www-data /usr/local/bin/wp config set WP_MAX_MEMORY_LIMIT 512M --path="${webroot}" > /dev/null 2>&1
 
   log_step "7/8 Installing WordPress..."
   wpcli_install_wordpress "${webroot}" "${domain}" "${title}" \
     "${admin_user}" "${admin_pass}" "${admin_email}"
   wpcli_setup_locale "${webroot}" "${locale}"
+  
+  log_info "Setting permalink structure to /%postname%/..."
+  sudo -u www-data /usr/local/bin/wp rewrite structure '/%postname%/' --path="${webroot}" > /dev/null 2>&1
 
   if [[ "${worker_mode}" == "true" ]]; then
     log_info "Creating worker.php bridge..."
@@ -146,10 +159,10 @@ EOF
   sudo -u www-data /usr/local/bin/wp config set DISABLE_WP_CRON true --raw --type=constant --path="${webroot}" > /dev/null 2>&1
   
   # Add real system cron (every 5 minutes) via /etc/cron.d for better management
-  echo "*/5 * * * * www-data /usr/local/bin/wp cron event run --due-now --path=${webroot} > /dev/null 2>&1" > "/etc/cron.d/fwp-${domain//./-}"
+  echo "*/5 * * * * sudo -u www-data /usr/local/bin/wp cron event run --due-now --path=${webroot} > /dev/null 2>&1" > "/etc/cron.d/fwp-${domain//./-}"
 
   _site_save_registry "${domain}" "${webroot}" \
-    "${db_name}" "${db_user}" "${db_pass}" \
+    "${db_name}" "${db_user}" "${db_pass}" "${db_prefix}" \
     "${admin_user}" "${admin_pass}" "${admin_email}" \
     "${skip_redis}" "${skip_ssl}" "${worker_mode}"
 
@@ -171,6 +184,37 @@ EOF
 
   _site_print_summary "${domain}" "${admin_user}" "${admin_pass}" \
     "${admin_email}" "${db_name}" "${db_user}" "${db_pass}" "${skip_ssl}"
+
+  log_info "Auditando Redirecionamentos, HSTS e TLS..."
+  local protocols=("http" "https")
+  local variants=("${domain}" "www.${domain}")
+  
+  echo -e "\n--- Auditoria de Redirecionamentos e HSTS ---"
+  for proto in "${protocols[@]}"; do
+    for var in "${variants[@]}"; do
+      echo -n "  Testing ${proto}://${var} -> "
+      curl -4Ik "${proto}://${var}" --resolve "${var}:${proto#*://}:127.0.0.1" 2>/dev/null | \
+        grep -Ei "HTTP/|location:|strict-transport-security:|server:" | tr '\n' ' '
+      echo ""
+    done
+  done
+
+  echo -e "\n--- Auditoria de TLS e SNI ---"
+  echo -n "  TLS 1.2 Handshake: "
+  echo | openssl s_client -connect 127.0.0.1:443 -servername "${domain}" -tls1_2 2>/dev/null | grep -Ei "Protocol  :|Cipher    :" | tr '\n' ' ' || echo "Falhou"
+  echo -e "\n"
+  
+  echo -n "  TLS 1.3 Handshake: "
+  echo | openssl s_client -connect 127.0.0.1:443 -servername "${domain}" -tls1_3 2>/dev/null | grep -Ei "Protocol  :|Cipher    :" | tr '\n' ' ' || echo "Falhou"
+  echo -e "\n"
+
+  echo -n "  Teste SEM SNI (Deveria ser rejeitado): "
+  if echo | openssl s_client -connect 127.0.0.1:443 2>&1 | grep -Ei "alert|error" > /dev/null; then
+    echo "Sucesso (Conexão rejeitada conforme esperado)"
+  else
+    echo "Aviso: Servidor aceitou conexão sem SNI"
+  fi
+  echo -e "\n${GREEN}${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 }
 
 _site_generate_caddyfile() {
@@ -185,17 +229,11 @@ _site_generate_caddyfile() {
   # Detect local/dev domains or --dev flag to use internal self-signed SSL
   if [[ "${skip_ssl}" == "false" ]]; then
     if [[ "${is_dev:-false}" == "true" ]] || [[ "${domain}" =~ \.(test|local|dev|example)$ ]] || [[ "${domain}" == "localhost" ]]; then
-      tls_block="    tls internal {
-        curves x25519
-        key_type ed25519
-        ciphers TLS_AES_128_GCM_SHA256 TLS_CHACHA20_POLY1305_SHA256
-    }"
+      tls_block="    tls internal"
     else
       tls_block="    tls {
         curves x25519
         key_type ed25519
-        ciphers TLS_AES_128_GCM_SHA256 TLS_CHACHA20_POLY1305_SHA256
-        reuse_private_keys
     }"
     fi
   fi
@@ -227,26 +265,20 @@ _site_generate_caddyfile() {
   fi
 
   cat > "${caddy_file}" << CADDY
-http://${domain} {
-    route {
-        header -Server
-        redir https://${domain}{uri} 301
-    }
+# 1. HTTP -> HTTPS (Same Host)
+http://${canonical}, http://${non_canonical} {
+    header -Server
+    redir https://{host}{uri} 301
 }
 
-http://www.${domain} {
-    route {
-        header -Server
-        redir https://www.${domain}{uri} 301
-    }
-}
-
+# 2. HTTPS Non-Canonical -> HTTPS Canonical (HSTS Preload compliant)
 https://${non_canonical} {
     ${tls_block}
-    route {
-        header -Server
-        redir https://${canonical}{uri} 301
+    header {
+        Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"
+        -Server
     }
+    redir https://${canonical}{uri} 301
 }
 
 https://${canonical} {
@@ -274,7 +306,7 @@ https://${canonical} {
 
     # 2. Headers de Segurança e Anonimato
     header {
-        Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+        Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"
         ?X-Frame-Options "SAMEORIGIN"
         ?X-Content-Type-Options "nosniff"
         ?Referrer-Policy "strict-origin-when-cross-origin"
@@ -289,7 +321,7 @@ https://${canonical} {
         -Via
     }
 
-    # 3. Cache Estático (WP Super Cache) - Servir HTML estático antes do PHP
+    # 3. Cache Estático (WP Super Cache)
     @nocache {
         header Cookie *wordpress_logged_in*
         header Cookie *wp-postpass*
@@ -338,7 +370,7 @@ https://${canonical} {
     }
     header @static Cache-Control "public, max-age=31536000, immutable"
 
-    # 4. Compressão (Antes de enviar ao PHP)
+    # 5. Compressão
     encode {
         zstd better
         br
@@ -346,16 +378,16 @@ https://${canonical} {
         minimum_length 512
     }
 
-    # 5. Processamento PHP (Worker Mode)
+    # 6. Processamento PHP (FrankenPHP)
     php_server {
         root ${webroot}
         resolve_root_symlink false
-        try_files {path} {path}/ /index.php?{query}
         ${worker_block}
         ${hot_reload_block}
     }
+    file_server
 
-    # 6. Logging (Último passo)
+    # 7. Logging
     log {
         output file ${log_dir}/access.log {
             roll_size     20MB
@@ -381,11 +413,12 @@ WEBROOT="${2}"
 DB_NAME="${3}"
 DB_USER="${4}"
 DB_PASS="${5}"
-WP_ADMIN_USER="${6}"
-WP_ADMIN_PASS="${7}"
-WP_ADMIN_EMAIL="${8}"
-REDIS_ENABLED="$( [[ "${9}" == "false" ]] && echo "true" || echo "false" )"
-SSL_ENABLED="$( [[ "${10}" == "false" ]] && echo "true" || echo "false" )"
+DB_PREFIX="${6}"
+WP_ADMIN_USER="${7}"
+WP_ADMIN_PASS="${8}"
+WP_ADMIN_EMAIL="${9}"
+REDIS_ENABLED="$( [[ "${10}" == "false" ]] && echo "true" || echo "false" )"
+SSL_ENABLED="$( [[ "${11}" == "false" ]] && echo "true" || echo "false" )"
 CONF
   chmod 600 "/etc/fwp/sites/${1}.conf"
   log_success "Registry: /etc/fwp/sites/${1}.conf"

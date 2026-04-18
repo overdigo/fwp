@@ -29,10 +29,11 @@ wpcli_download_wordpress() {
 }
 
 wpcli_create_config() {
-  local path="$1" dbname="$2" dbuser="$3" dbpass="$4"
-  log_info "Generating wp-config.php..."
+  local path="$1" dbname="$2" dbuser="$3" dbpass="$4" dbprefix="${5:-wp_}"
+  log_info "Generating wp-config.php (prefix: ${dbprefix})..."
   WP_PATH="${path}" wp_cli config create \
     --dbname="${dbname}" --dbuser="${dbuser}" --dbpass="${dbpass}" \
+    --dbprefix="${dbprefix}" \
     --dbhost="localhost:/run/mysqld/mysqld.sock" --dbcharset="utf8mb4" \
     --dbcollate="utf8mb4_unicode_ci" --skip-check
   WP_PATH="${path}" wp_cli config set WP_CACHE            true  --raw

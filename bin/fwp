@@ -12,7 +12,7 @@ for mod in log os utils banner; do
   source "${FWP_HOME}/src/core/${mod}.sh"
 done
 
-VERSION="0.2.5"
+VERSION="0.3.0"
 
 show_help() {
   echo -e "
