@@ -4,6 +4,7 @@ site_create() {
   local domain="" locale="${FWP_DEFAULT_LOCALE:-en_US}"
   local title="My WordPress Site" admin_user="admwp" admin_email=""
   local skip_redis=false skip_ssl=false www_pref="" worker_mode=false
+  local is_dev=false
   local positional=()
   while [[ $# -gt 0 ]]; do
     case "$1" in
