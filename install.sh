@@ -8,7 +8,7 @@
 # ==============================================================================
 set -euo pipefail
 
-FWP_VERSION="0.2.2"
+FWP_VERSION="0.2.3"
 FWP_REPO_RAW="https://cdn.jsdelivr.net/gh/overdigo/fwp@main"
 FWP_HOME="/opt/fwp"
 FWP_BIN="/usr/local/bin/fwp"

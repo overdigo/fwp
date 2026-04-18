@@ -359,7 +359,7 @@ https://${canonical} {
         output file ${log_dir}/access.log {
             roll_size     20MB
             roll_keep     5
-            roll_keep_days 7
+            roll_keep_for 168h
         }
         level  WARN
     }
