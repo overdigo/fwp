@@ -38,25 +38,111 @@ stack_frankenphp_upgrade() {
 }
 
 stack_setup_global_caddyfile() {
+  local cpus; cpus=$(nproc)
+  local num_workers=$(( cpus * 2 ))
+  [[ $num_workers -lt 4 ]] && num_workers=4
+  local num_threads=$(( num_workers + 1 ))
+  local max_threads=$(( (cpus * 8) + 1 ))
+  
+  log_info "FrankenPHP Tuning: ${cpus} CPUs detected -> ${num_threads} initial / ${max_threads} max threads"
+
   mkdir -p "${CADDY_CONFIG_DIR}/sites-available" "${CADDY_CONFIG_DIR}/sites-enabled"
-  cat > "${CADDY_CONFIG_DIR}/Caddyfile" << 'CADDY'
+  cat > "${CADDY_CONFIG_DIR}/Caddyfile" << CADDY
 {
-    # Enable FrankenPHP
-    frankenphp
+    # Enable FrankenPHP with dynamic thread scaling
+    frankenphp {
+        num_threads ${num_threads}
+        max_threads ${max_threads}
+        max_wait_time 45s
+    }
 
     order php_server before file_server
     admin off
 }
 
-# Import all enabled site configs (using glob that doesn't fail if empty)
+# Import all enabled site configs
 import sites-enabled/*.conf
 CADDY
   touch "${CADDY_CONFIG_DIR}/sites-enabled/.placeholder"
   log_success "Global Caddyfile written: ${CADDY_CONFIG_DIR}/Caddyfile"
 }
 
+stack_setup_php_config() {
+  log_info "Configuring PHP ZTS for maximum performance..."
+  mkdir -p /etc/frankenphp/conf.d
+  cat > /etc/frankenphp/conf.d/99-frankenwp.ini << EOF
+[PHP]
+engine = On
+short_open_tag = Off
+precision = 14
+output_buffering = 4096
+zlib.output_compression = Off
+implicit_flush = Off
+unserialize_max_depth = 4096
+serialize_precision = -1
+disable_functions = pcntl_alarm,pcntl_fork,pcntl_waitpid,pcntl_wait,pcntl_wifexited,pcntl_wifstopped,pcntl_wifsignaled,pcntl_wifcontinued,pcntl_wexitstatus,pcntl_wtermsig,pcntl_wstopsig,pcntl_signal,pcntl_signal_get_handler,pcntl_signal_dispatch,pcntl_get_last_error,pcntl_strerror,pcntl_sigprocmask,pcntl_sigwaitinfo,pcntl_sigtimedwait,pcntl_exec,pcntl_getpriority,pcntl_setpriority,pcntl_async_signals,pcntl_unshare,
+zend.enable_gc = On
+expose_php = Off
+max_execution_time = 300
+max_input_time = 120
+max_input_vars = 5000
+memory_limit = 512M
+upload_max_filesize = 128M
+post_max_size = 128M
+error_reporting = E_ALL & ~E_DEPRECATED & ~E_STRICT
+display_errors = Off
+log_errors = On
+variables_order = "GPCS"
+request_order = "GPC"
+register_argc_argv = Off
+auto_globals_jit = On
+default_charset = "UTF-8"
+sys_temp_dir = "/tmp"
+file_uploads = On
+allow_url_fopen = On
+allow_url_include = Off
+default_socket_timeout = 60
+
+# Performance
+realpath_cache_size = 4096k
+realpath_cache_ttl = 600
+
+[Date]
+date.timezone = America/Sao_Paulo
+
+[MySQLi]
+mysqli.allow_persistent = On
+mysqli.max_persistent = 0
+mysqli.reconnect = Off
+
+[opcache]
+opcache.enable=1
+opcache.enable_cli=1
+opcache.memory_consumption=256
+opcache.interned_strings_buffer=36
+opcache.max_accelerated_files=20000
+opcache.jit=1255
+opcache.jit_buffer_size=32M
+opcache.validate_timestamps=0
+
+[Session]
+session.use_strict_mode = 1
+session.use_cookies = 1
+session.cookie_secure = 1
+session.use_only_cookies = 1
+session.cookie_httponly = 1
+session.cookie_samesite = Strict
+session.gc_probability = 0
+EOF
+  log_success "PHP config written: /etc/frankenphp/conf.d/99-frankenwp.ini"
+}
+
 stack_setup_systemd_service() {
-  cat > /etc/systemd/system/frankenphp.service << 'SERVICE'
+  local ram_bytes; ram_bytes=$(free -b | grep Mem | awk '{print $2}')
+  # Set GOMEMLIMIT to 90% of total RAM to leave room for the OS
+  local gomemlimit=$(( ram_bytes * 9 / 10 ))
+
+  cat > /etc/systemd/system/frankenphp.service << SERVICE
 [Unit]
 Description=FrankenPHP Server
 Documentation=https://frankenphp.dev
@@ -70,8 +156,11 @@ Group=www-data
 WorkingDirectory=/etc/frankenphp
 Environment=XDG_DATA_HOME=/var/lib/frankenphp/data
 Environment=XDG_CONFIG_HOME=/var/lib/frankenphp/config
+Environment=PHP_INI_SCAN_DIR=/etc/frankenphp/conf.d
+Environment=GODEBUG=cgocheck=0
+Environment=GOMEMLIMIT=${gomemlimit}
 ExecStart=/usr/local/bin/frankenphp run --config /etc/frankenphp/Caddyfile
-ExecReload=/bin/kill -USR1 $MAINPID
+ExecReload=/bin/kill -USR1 \$MAINPID
 TimeoutStopSec=5s
 LimitNOFILE=1048576
 LimitNPROC=65535
@@ -88,7 +177,7 @@ SERVICE
   chown -R www-data:www-data /var/lib/frankenphp
   systemctl daemon-reload
   systemctl enable frankenphp
-  log_success "frankenphp.service installed and enabled"
+  log_success "frankenphp.service installed with GOMEMLIMIT=${gomemlimit}B"
 }
 
 stack_status() {

@@ -3,7 +3,7 @@
 site_create() {
   local domain="" locale="${FWP_DEFAULT_LOCALE:-en_US}"
   local title="My WordPress Site" admin_user="admwp" admin_email=""
-  local skip_redis=false skip_ssl=false www_pref=""
+  local skip_redis=false skip_ssl=false www_pref="" worker_mode=false
   local positional=()
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -20,6 +20,7 @@ site_create() {
       --www)           www_pref="www";         shift ;;
       --no-www)        www_pref="non-www";     shift ;;
       --skip-www-prompt) www_pref="none";      shift ;;
+      --worker)        worker_mode=true;       shift ;;
       *)               positional+=("$1");     shift ;;
     esac
   done
@@ -93,7 +94,7 @@ site_create() {
   stack_mariadb_create_db "${db_name}" "${db_user}" "${db_pass}"
 
   log_step "5/8 Configuring FrankenPHP (Caddyfile)..."
-  _site_generate_caddyfile "${domain}" "${webroot}" "${skip_ssl}" "${www_pref}"
+  _site_generate_caddyfile "${domain}" "${webroot}" "${skip_ssl}" "${www_pref}" "${worker_mode}"
   _frankenphp_reload
 
   log_step "6/8 Downloading WordPress..."
@@ -105,6 +106,31 @@ site_create() {
     "${admin_user}" "${admin_pass}" "${admin_email}"
   wpcli_setup_locale "${webroot}" "${locale}"
 
+  if [[ "${worker_mode}" == "true" ]]; then
+    log_info "Creating worker.php bridge..."
+    cat > "${webroot}/worker.php" << 'EOF'
+<?php
+// FrankenWP — WordPress Worker Bridge
+ignore_user_abort(true);
+
+// Bootstrap do WordPress feito UMA VEZ
+define('ABSPATH', __DIR__ . '/');
+define('WPINC', 'wp-includes');
+
+// Loop de requests
+$handler = static function () {
+    // Carrega o WordPress normalmente
+    require __DIR__ . '/wp-blog-header.php';
+};
+
+// Loop principal — bloqueia até uma requisição chegar
+while (frankenphp_handle_request($handler)) {
+    gc_collect_cycles();
+}
+EOF
+    chown www-data:www-data "${webroot}/worker.php"
+  fi
+
   log_step "8/8 Enabling Redis Object Cache..."
   if [[ "${skip_redis}" == "false" ]] && systemctl is-active --quiet redis-server 2>/dev/null; then
     wpcli_setup_redis_cache "${webroot}"
@@ -112,23 +138,33 @@ site_create() {
     log_info "Skipping Redis (not available or --skip-redis)"
   fi
 
+  log_step "Installing WP Super Cache..."
+  sudo -u www-data /usr/local/bin/wp plugin install wp-super-cache --activate --path="${webroot}" > /dev/null 2>&1
+
+  log_step "Configuring Cron tasks..."
+  sudo -u www-data /usr/local/bin/wp config set DISABLE_WP_CRON true --raw --type=constant --path="${webroot}" > /dev/null 2>&1
+  
+  # Add real system cron (every 5 minutes)
+  (crontab -u www-data -l 2>/dev/null; echo "*/5 * * * * /usr/local/bin/wp cron event run --due-now --path=${webroot} > /dev/null 2>&1") | crontab -u www-data -
+
   _site_save_registry "${domain}" "${webroot}" \
     "${db_name}" "${db_user}" "${db_pass}" \
     "${admin_user}" "${admin_pass}" "${admin_email}" \
-    "${skip_redis}" "${skip_ssl}"
+    "${skip_redis}" "${skip_ssl}" "${worker_mode}"
 
   if [[ "${is_dev:-false}" == "true" ]]; then
     log_step "Extra: Importing WordPress Theme Unit Test data..."
-    wp plugin install wordpress-importer --activate --path="${webroot}" --allow-root
+    sudo -u www-data /usr/local/bin/wp plugin install wordpress-importer --activate --path="${webroot}"
     
     local xml_file="/tmp/themeunittestdata.xml"
     if [[ ! -f "${xml_file}" ]]; then
       log_info "Downloading test data..."
       curl -sSL -o "${xml_file}" https://raw.githubusercontent.com/WPTT/theme-test-data/master/themeunittestdata.wordpress.xml
+      chown www-data:www-data "${xml_file}"
     fi
     
     log_info "Importing XML (this may take a minute)..."
-    wp import "${xml_file}" --authors=create --path="${webroot}" --allow-root
+    sudo -u www-data /usr/local/bin/wp import "${xml_file}" --authors=create --path="${webroot}"
     log_success "Test data imported"
   fi
 
@@ -137,7 +173,7 @@ site_create() {
 }
 
 _site_generate_caddyfile() {
-  local domain="$1" webroot="$2" skip_ssl="$3" www_pref="${4:-non-www}"
+  local domain="$1" webroot="$2" skip_ssl="$3" www_pref="${4:-non-www}" worker_mode="${5:-false}"
   local caddy_file="/etc/frankenphp/sites-available/${domain}.conf"
   local log_dir="/var/www/${domain}/logs"
   
@@ -148,63 +184,79 @@ _site_generate_caddyfile() {
   # Detect local/dev domains or --dev flag to use internal self-signed SSL
   if [[ "${skip_ssl}" == "false" ]]; then
     if [[ "${is_dev:-false}" == "true" ]] || [[ "${domain}" =~ \.(test|local|dev|example)$ ]] || [[ "${domain}" == "localhost" ]]; then
-      tls_block="    tls internal"
+      tls_block="    tls internal {
+        curves x25519
+        key_type ed25519
+        ciphers TLS_AES_128_GCM_SHA256 TLS_CHACHA20_POLY1305_SHA256
+    }"
+    else
+      tls_block="    tls {
+        curves x25519
+        key_type ed25519
+        ciphers TLS_AES_128_GCM_SHA256 TLS_CHACHA20_POLY1305_SHA256
+        reuse_private_keys
+    }"
     fi
   fi
 
-  local redir_block=""
-  local main_host="${proto}://${domain}"
+  local cpus; cpus=$(nproc)
+  local num_workers=$(( cpus * 8 ))
+  [[ $num_workers -lt 8 ]] && num_workers=8
 
+  local worker_block=""
+  if [[ "${worker_mode}" == "true" ]]; then
+    worker_block="worker ${webroot}/worker.php ${num_workers}"
+  fi
+
+  local hot_reload_block=""
+  local mercure_block=""
+  if [[ "${is_dev:-false}" == "true" ]]; then
+    mercure_block="    mercure {
+        anonymous
+    }"
+    hot_reload_block="        hot_reload"
+  fi
+
+  # Determine canonical and non-canonical based on preference
+  local canonical="${domain}"
+  local non_canonical="www.${domain}"
   if [[ "${www_pref}" == "www" ]]; then
-    main_host="${proto}://www.${domain}"
-    redir_block="${proto}://${domain} {
-    redir ${proto}://www.${domain}{uri}
-}
-"
-  elif [[ "${www_pref}" == "non-www" ]]; then
-    main_host="${proto}://${domain}"
-    redir_block="${proto}://www.${domain} {
-    redir ${proto}://${domain}{uri}
-}
-"
+      canonical="www.${domain}"
+      non_canonical="${domain}"
   fi
 
   cat > "${caddy_file}" << CADDY
-${redir_block}
-${main_host} {
+http://${domain} {
+    route {
+        header -Server
+        redir https://${domain}{uri} 301
+    }
+}
+
+http://www.${domain} {
+    route {
+        header -Server
+        redir https://www.${domain}{uri} 301
+    }
+}
+
+https://${non_canonical} {
+    ${tls_block}
+    route {
+        header -Server
+        redir https://${canonical}{uri} 301
+    }
+}
+
+https://${canonical} {
     root * ${webroot}
     ${tls_block}
+    ${mercure_block}
 
-    # FrankenPHP worker — handles PHP via worker mode for best performance
-    php_server
-
-    # Compression: Zstandard (fastest), Brotli (best ratio), Gzip (fallback)
-    encode zstd br gzip
-
-    log {
-        output file ${log_dir}/access.log {
-            roll_size 50mb
-            roll_keep 7
-            roll_keep_for 720h
-        }
-        format console
-    }
-
-    @wp_login       path /wp-login.php
+    # 1. Matchers e Bloqueios (Performance: descartar lixo rápido)
     @wp_xmlrpc      path /xmlrpc.php
-    @wp_jwt         path /wp-json/jwt-auth/v1/token
     @wp_users_enum  path /wp-json/wp/v2/users
-    @wp_comments    path /wp-comments-post.php
     @author_enum    query author=*
-
-    @wp_rest_write {
-        path /wp-json/*
-        method POST PUT PATCH DELETE
-    }
-
-    @wp_search query s=*
-
-    # Block access to sensitive WordPress files
     @blocked {
         path /wp-config.php
         path /.htaccess
@@ -215,20 +267,18 @@ ${main_host} {
         path /wp-content/uploads/*.php
     }
 
-    # -------------------------------------------------------
-    # Bloqueios diretos
-    # -------------------------------------------------------
     respond @blocked 403
-    respond @wp_xmlrpc   403
+    respond @wp_xmlrpc 403
     respond @author_enum 403
 
+    # 2. Headers de Segurança e Anonimato
     header {
         Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
         ?X-Frame-Options "SAMEORIGIN"
         ?X-Content-Type-Options "nosniff"
         ?Referrer-Policy "strict-origin-when-cross-origin"
         Permissions-Policy "geolocation=(), microphone=(), camera=(), payment=(), usb=()"
-        ?Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https: blob:; font-src 'self' data:; connect-src 'self'; frame-ancestors 'self'; base-uri 'self'; form-action 'self'"
+        ?Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' blob:; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: https: blob:; font-src 'self' data:; connect-src 'self'; media-src 'self' https: data: blob:; frame-ancestors 'self'; base-uri 'self'; form-action 'self'"
         ?X-XSS-Protection "1; mode=block"
         ?Cross-Origin-Opener-Policy "same-origin-allow-popups"
         ?Cross-Origin-Embedder-Policy "unsafe-none"
@@ -238,7 +288,26 @@ ${main_host} {
         -Via
     }
 
-    # Negociação de conteúdo para imagens (AVIF e WebP)
+    # 3. Cache Estático (WP Super Cache) - Servir HTML estático antes do PHP
+    @nocache {
+        header Cookie *wordpress_logged_in*
+        header Cookie *wp-postpass*
+        header Cookie *woocommerce_items_in_cart*
+    }
+
+    @supercache {
+        not header Cookie *wordpress_logged_in*
+        not header Cookie *wp-postpass*
+        not header Cookie *woocommerce_items_in_cart*
+        expression {query} == ""
+        method GET
+        file {
+            try_files /wp-content/cache/supercache/{host}{uri}/index.html
+        }
+    }
+    rewrite @supercache /wp-content/cache/supercache/{host}{uri}/index.html
+
+    # 4. Cache de Ativos Estáticos e Negociação de Imagens
     @avif {
         header Accept *image/avif*
         path *.jpg *.jpeg *.png
@@ -257,19 +326,43 @@ ${main_host} {
     }
     rewrite @webp {path}.webp
 
-    # Headers específicos para imagens para o cache lidar bem com a negociação
     @images {
         path *.jpg *.jpeg *.png *.webp *.avif
     }
     header @images Vary "Accept"
 
-    # Long-term cache for immutable static assets
     @static {
         file
-        path *.ico *.css *.js *.gif *.jpg *.jpeg *.png *.svg
-        path *.woff *.woff2 *.webp *.avif *.mp4 *.webm
+        path *.ico *.css *.js *.gif *.jpg *.jpeg *.png *.svg *.woff *.woff2 *.webp *.avif *.mp4 *.webm
     }
     header @static Cache-Control "public, max-age=31536000, immutable"
+
+    # 4. Compressão (Antes de enviar ao PHP)
+    encode {
+        zstd better
+        br
+        gzip 6
+        minimum_length 512
+    }
+
+    # 5. Processamento PHP (Worker Mode)
+    php_server {
+        root ${webroot}
+        resolve_root_symlink false
+        try_files {path} {path}/ /index.php?{query}
+        ${worker_block}
+        ${hot_reload_block}
+    }
+
+    # 6. Logging (Último passo)
+    log {
+        output file ${log_dir}/access.log {
+            roll_size     20MB
+            roll_keep     5
+            roll_keep_days 7
+        }
+        level  WARN
+    }
 }
 CADDY
 

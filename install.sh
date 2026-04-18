@@ -8,7 +8,7 @@
 # ==============================================================================
 set -euo pipefail
 
-FWP_VERSION="0.1.0"
+FWP_VERSION="0.2.0"
 FWP_REPO_RAW="https://cdn.jsdelivr.net/gh/overdigo/fwp@main"
 FWP_HOME="/opt/fwp"
 FWP_BIN="/usr/local/bin/fwp"
@@ -75,32 +75,17 @@ detect_arch() {
 }
 
 install_base_deps() {
-  log_step "Adding repositories & installing dependencies (optimized)..."
+  log_step "Installing base dependencies..."
   export DEBIAN_FRONTEND=noninteractive
-  apt-get update -qq || apt-get update -qq || true
-  apt-get install -y -qq curl wget gnupg lsb-release debconf-utils ca-certificates >/dev/null 2>&1
+  apt-get update -qq || true
+  apt-get install -y -qq curl wget gnupg lsb-release debconf-utils ca-certificates git unzip tar ufw fail2ban logrotate >/dev/null 2>&1
 
-  # Add MySQL 8.4 repo (Updated to .36 for newer GPG keys and Debian 13 support)
-  wget -qO /tmp/mysql-apt-config.deb https://dev.mysql.com/get/mysql-apt-config_0.8.36-1_all.deb
-  echo "mysql-apt-config mysql-apt-config/select-server select mysql-8.4-lts" | debconf-set-selections
-  echo "mysql-apt-config mysql-apt-config/select-product select Ok" | debconf-set-selections
-  dpkg -i /tmp/mysql-apt-config.deb >/dev/null 2>&1
-  # Force trust to prevent 'sqv' strict expiration blocks on Debian 13
-  sed -i 's/deb http/deb [trusted=yes] http/g' /etc/apt/sources.list.d/mysql.list 2>/dev/null || true
-
-  # Add Redis 8 repo
+  # Redis 8 repo
   curl -fsSL https://packages.redis.io/gpg | gpg --dearmor -o /usr/share/keyrings/redis-archive-keyring.gpg --yes
-  chmod 644 /usr/share/keyrings/redis-archive-keyring.gpg
   echo "deb [signed-by=/usr/share/keyrings/redis-archive-keyring.gpg] https://packages.redis.io/deb $(lsb_release -cs) main" > /etc/apt/sources.list.d/redis.list
-
-  # Fast, bulk installation
-  apt-get update -qq || apt-get update -qq || true
-  apt-get install -y -qq \
-    git unzip tar ufw fail2ban logrotate \
-    mysql-server mysql-client redis \
-    >/dev/null 2>&1
-
-  log_success "All stack dependencies installed in bulk"
+  apt-get update -qq || true
+  apt-get install -y -qq redis >/dev/null 2>&1
+  log_success "Base dependencies installed"
 }
 
 install_frankenphp() {
@@ -197,18 +182,21 @@ setup_firewall() {
 }
 
 setup_services() {
-  log_step "Configuring services..."
+  log_step "Configuring stack..."
   source "${FWP_HOME}/src/core/log.sh"
+  source "${FWP_HOME}/src/core/os.sh"
   source "${FWP_HOME}/src/stack/frankenphp.sh"
   source "${FWP_HOME}/src/stack/mariadb.sh"
   source "${FWP_HOME}/src/stack/redis.sh"
+  
   stack_setup_global_caddyfile
+  stack_setup_php_config
   stack_setup_systemd_service
   
   stack_mariadb_install
   stack_redis_install
   
-  systemctl enable --now frankenphp mysql redis-server 2>/dev/null || true
+  systemctl enable --now frankenphp redis-server 2>/dev/null || true
   log_success "All services enabled and started"
 }
 
@@ -223,7 +211,8 @@ FWP_CADDY_CONFIG_DIR="/etc/frankenphp"
 FWP_LOG_FILE="${FWP_LOG_DIR}/fwp.log"
 FWP_DEFAULT_LOCALE="en_US"
 FWP_REDIS_ENABLED="true"
-FWP_REDIS_MAXMEM="128mb"
+FWP_DB_TYPE="${FWP_DB_TYPE}"
+FWP_DB_VERSION="${FWP_DB_VERSION}"
 CONF
   log_success "Config: ${FWP_CONFIG_DIR}/fwp.conf"
 }
@@ -237,18 +226,73 @@ print_success() {
   echo -e "  ${BOLD}Create your first site:${NC}"
   echo -e "  ${CYAN}sudo fwp site create yourdomain.com${NC}"
   echo ""
-  echo -e "  ${YELLOW}fwp site list${NC}          List sites"
-  echo -e "  ${YELLOW}fwp stack status${NC}       Services + kernel status"
-  echo -e "  ${YELLOW}fwp firewall status${NC}    Active firewall rules"
-  echo -e "  ${YELLOW}fwp --help${NC}             Full help"
-  echo ""
 }
 
 main() {
+  local db_type="mariadb"
+  local db_version="default"
+  
+  # Simple arg parsing
+  for arg in "$@"; do
+    case "${arg}" in
+      --mysql)     db_type="mysql" ;;
+      --mariadb)   db_type="mariadb" ;;
+      --db-version=*) db_version="${arg#*=}" ;;
+    esac
+  done
+
   print_banner
   check_root
   detect_os
   detect_arch
+
+  # Interactive selection if not provided and not in silent mode
+  if [[ "$*" != *"--mysql"* ]] && [[ "$*" != *"--mariadb"* ]]; then
+    echo -e "\n${BOLD}Database Selection:${NC}"
+    echo -e "  1) Use Distro Default (Recommended for stability)"
+    echo -e "  2) MariaDB Foundation (Official Repository)"
+    echo -e "  3) MySQL Oracle (Official Repository)"
+    read -p "Select provider [1]: " db_provider_choice
+
+    case "${db_provider_choice}" in
+      2)
+        db_type="mariadb"
+        echo -e "\n  ${CYAN}Select MariaDB Version:${NC}"
+        echo -e "    1) 10.11 (LTS)"
+        echo -e "    2) 11.4"
+        echo -e "    3) 11.8"
+        read -p "    Choice [1]: " v_choice
+        case "${v_choice}" in
+          2) db_version="11.4" ;;
+          3) db_version="11.8" ;;
+          *) db_version="10.11" ;;
+        esac
+        ;;
+      3)
+        db_type="mysql"
+        echo -e "\n  ${CYAN}Select MySQL Version:${NC}"
+        echo -e "    1) 8.0"
+        echo -e "    2) 8.4 (LTS)"
+        echo -e "    3) 9.0 (Innovation)"
+        read -p "    Choice [2]: " v_choice
+        case "${v_choice}" in
+          1) db_version="8.0" ;;
+          3) db_version="9.0" ;;
+          *) db_version="8.4" ;;
+        esac
+        ;;
+      *)
+        db_type="mariadb"
+        db_version="default"
+        # On Ubuntu 26.04, mysql-server is the default
+        [[ "${OS_ID}" == "ubuntu" ]] && [[ "${OS_VERSION}" == "26.04" ]] && db_type="mysql"
+        ;;
+    esac
+  fi
+
+  export FWP_DB_TYPE="${db_type}"
+  export FWP_DB_VERSION="${db_version}"
+
   install_base_deps
   install_frankenphp
   install_wpcli

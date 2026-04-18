@@ -33,7 +33,7 @@ wpcli_create_config() {
   log_info "Generating wp-config.php..."
   WP_PATH="${path}" wp_cli config create \
     --dbname="${dbname}" --dbuser="${dbuser}" --dbpass="${dbpass}" \
-    --dbhost="127.0.0.1" --dbcharset="utf8mb4" \
+    --dbhost="localhost:/run/mysqld/mysqld.sock" --dbcharset="utf8mb4" \
     --dbcollate="utf8mb4_unicode_ci" --skip-check
   WP_PATH="${path}" wp_cli config set WP_CACHE            true  --raw
   WP_PATH="${path}" wp_cli config set WP_POST_REVISIONS   5     --raw
@@ -57,8 +57,8 @@ wpcli_setup_redis_cache() {
   local path="$1"
   log_info "Installing Redis Object Cache plugin..."
   WP_PATH="${path}" wp_cli plugin install redis-cache --activate
-  WP_PATH="${path}" wp_cli config set WP_REDIS_HOST "127.0.0.1"
-  WP_PATH="${path}" wp_cli config set WP_REDIS_PORT     6379 --raw
+  WP_PATH="${path}" wp_cli config set WP_REDIS_SCHEME "unix"
+  WP_PATH="${path}" wp_cli config set WP_REDIS_PATH   "/var/run/redis/redis-server.sock"
   WP_PATH="${path}" wp_cli config set WP_REDIS_DATABASE 0    --raw
   WP_PATH="${path}" wp_cli redis enable 2>/dev/null || true
   log_success "Redis Object Cache enabled"

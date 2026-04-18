@@ -29,15 +29,15 @@ sudo fwp site create example.com
 | Component | Notes |
 |---|---|
 | **FrankenPHP** | Latest release, auto-detects x86_64 / aarch64 |
-| **MariaDB** | `utf8mb4`, InnoDB buffer 256 MB, slow query log |
-| **Redis** | 128 MB max memory, `allkeys-lru` eviction |
+| **MariaDB** | `utf8mb4`, Socket connection only (TCP disabled), optimized config |
+| **Redis** | Socket connection only (TCP disabled), eviction: `allkeys-lru` |
 | **WP-CLI** | Latest phar |
 | **WordPress** | Any locale, fully automated via WP-CLI |
 | **Let's Encrypt HTTPS** | Automatic via FrankenPHP / Caddy |
 | **HTTP/3 + QUIC** | Enabled by default (`443/tcp` + `443/udp`) |
 | **Zstandard compression** | `zstd` → `br` → `gzip` in Caddyfile |
 | **Image Optimization** | Automatic AVIF / WebP negotiation via `Accept` header |
-| **Security Headers** | HSTS, CSP, XSS protection, hidden server signatures |
+| **Security Headers** | HSTS, CSP, TLS 1.3, Ed25519 certificates, hidden signatures |
 | **Rate Limiting** | Anti-bruteforce for wp-login, XML-RPC block, API limits |
 | **Kernel tuning** | BBR, sysctl, open file limits |
 | **UFW + Fail2Ban** | Hardened rules |

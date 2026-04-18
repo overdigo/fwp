@@ -1,19 +1,79 @@
 #!/usr/bin/env bash
-# MODULE: mariadb.sh — MariaDB installation and database management
+# MODULE: mariadb.sh — MariaDB/MySQL installation and management
+
 stack_mariadb_install() {
-  if systemctl is-active --quiet mysql 2>/dev/null; then
-    log_warn "MySQL already running. Skipping."; return 0
+  local db_type="${FWP_DB_TYPE:-mariadb}"
+  local db_version="${FWP_DB_VERSION:-default}"
+
+  if systemctl is-active --quiet mysql 2>/dev/null || systemctl is-active --quiet mariadb 2>/dev/null; then
+    log_warn "Database server already running. Ensuring optimization..."
+    _db_optimize_config "${db_type}"
+    return 0
   fi
-  # Core packages are already installed via install_base_deps
-  log_step "Initializing MySQL 8.4 Server..."
-  _mariadb_optimize_config
-  log_success "MySQL 8.4 installed and running"
+
+  log_step "Installing ${db_type^} (${db_version})..."
+
+  case "${db_type}" in
+    mysql)
+      _db_setup_mysql_repo "${db_version}"
+      fwp_os_pkg_install mysql-server
+      ;;
+    mariadb)
+      if [[ "${db_version}" != "default" ]]; then
+        _db_setup_mariadb_repo "${db_version}"
+      fi
+      fwp_os_pkg_install mariadb-server
+      ;;
+  esac
+
+  _db_optimize_config "${db_type}"
+  log_success "${db_type^} installed and optimized"
 }
 
-_mariadb_optimize_config() {
+_db_setup_mysql_repo() {
+  local version="$1"
+  log_info "Adding official MySQL repository (Version: ${version})..."
+  
+  # Map version to mysql-apt-config selection
+  local select_version="mysql-8.4-lts"
+  [[ "${version}" == "8.0" ]] && select_version="mysql-8.0"
+  [[ "${version}" == "9.0" ]] && select_version="mysql-innovation"
+
+  local repo_url="https://dev.mysql.com/get/mysql-apt-config_0.8.32-1_all.deb"
+  local tmp_deb="/tmp/mysql-repo.deb"
+  curl -sSL -o "${tmp_deb}" "${repo_url}"
+  
+  echo "mysql-apt-config mysql-apt-config/select-server select ${select_version}" | debconf-set-selections
+  echo "mysql-apt-config mysql-apt-config/select-product select Ok" | debconf-set-selections
+  DEBIAN_FRONTEND=noninteractive fwp_os_pkg_install "${tmp_deb}"
+  fwp_os_pkg_update
+  rm -f "${tmp_deb}"
+}
+
+_db_setup_mariadb_repo() {
+  local version="$1"
+  log_info "Adding official MariaDB Foundation repository (Version: ${version})..."
+  fwp_os_pkg_install curl apt-transport-https
+  mkdir -p /etc/apt/keyrings
+  curl -o /etc/apt/keyrings/mariadb-keyring.pgp 'https://mariadb.org/mariadb_release_signing_key.pgp'
+  cat > /etc/apt/sources.list.d/mariadb.sources << EOF
+X-Repolib-Name: MariaDB
+Types: deb
+URIs: https://mirrors.layeronline.com/mariadb/repo/${version}/${OS_ID}
+Suites: ${OS_CODENAME}
+Components: main
+Signed-By: /etc/apt/keyrings/mariadb-keyring.pgp
+EOF
+  fwp_os_pkg_update
+}
+
+_db_optimize_config() {
+  local type="$1"
   local sys_ram_mb; sys_ram_mb=$(awk '/MemTotal/ {printf "%.0f", $2/1024}' /proc/meminfo)
   
+  # Advanced Tuning Profiles based on available RAM
   local i_bp="128M" i_rlc="64M" tcs="16" tdc="1000" toc="1000" tmp="16M" mc="20"
+  
   if [ "$sys_ram_mb" -ge 15000 ]; then       # ~16GB
     i_bp="4G" i_rlc="1G" tcs="128" tdc="8000" toc="8000" tmp="128M" mc="150"
   elif [ "$sys_ram_mb" -ge 7500 ]; then      # ~8GB
@@ -28,14 +88,16 @@ _mariadb_optimize_config() {
     i_bp="512M" i_rlc="128M" tcs="24" tdc="1500" toc="1500" tmp="24M" mc="30"
   fi
 
-  mkdir -p /etc/mysql/mysql.conf.d
-  cat > /etc/mysql/mysql.conf.d/99-frankenwp.cnf << CNF
-# FrankenWP — MySQL 8.4 Performance Tuning (Dynamic Profile: ~${sys_ram_mb}MB RAM)
+  local conf_file="/etc/mysql/mariadb.conf.d/99-frankenwp.cnf"
+  [[ "${type}" == "mysql" ]] && conf_file="/etc/mysql/mysql.conf.d/99-frankenwp.cnf"
+  mkdir -p "$(dirname "${conf_file}")"
+
+  cat > "${conf_file}" << CNF
+# FrankenWP — ${type^} Tuning (Profile: ~${sys_ram_mb}MB RAM)
 [mysqld]
 skip_name_resolve       = 1
 max_connections         = ${mc}
 innodb_buffer_pool_size = ${i_bp}
-innodb_redo_log_capacity = ${i_rlc}
 innodb_flush_method     = O_DIRECT
 innodb_file_per_table   = 1
 thread_cache_size       = ${tcs}
@@ -45,35 +107,43 @@ max_heap_table_size     = ${tmp}
 table_open_cache        = ${toc}
 character-set-server    = utf8mb4
 collation-server        = utf8mb4_unicode_ci
-log_error_verbosity     = 1
-general_log             = 0
-slow_query_log          = 0
+# Networking — Disable TCP, use Socket only
+skip_networking         = ON
+socket                  = /run/mysqld/mysqld.sock
+
+# Performance
 performance_schema      = OFF
 CNF
-  systemctl restart mysql
-  log_success "MySQL optimized for ~${sys_ram_mb}MB RAM (InnoDB buffer ${i_bp})"
+
+  # Redo Log / Log File Size handling
+  if [[ "${type}" == "mysql" ]]; then
+    # MySQL 8.0.30+ uses innodb_redo_log_capacity
+    echo "innodb_redo_log_capacity = ${i_rlc}" >> "${conf_file}"
+  else
+    # MariaDB still uses innodb_log_file_size
+    echo "innodb_log_file_size = ${i_rlc}" >> "${conf_file}"
+  fi
+
+  systemctl restart mysql 2>/dev/null || systemctl restart mariadb
+  log_success "${type^} optimized for ~${sys_ram_mb}MB RAM (InnoDB buffer ${i_bp})"
 }
 
 stack_mariadb_create_db() {
   local dbname="$1" dbuser="$2" dbpass="$3"
   log_info "Creating database '${dbname}'..."
-  local retry=0
-  while ! mysql --defaults-file=/etc/mysql/debian.cnf -e "SELECT 1" >/dev/null 2>&1 && ! mysql -u root -e "SELECT 1" >/dev/null 2>&1; do
-    if [ "${retry}" -ge 10 ]; then
-      log_warn "MySQL not ready after 20 seconds..."
-      break
-    fi
-    sleep 2
-    retry=$((retry+1))
-  done
-
+  
   local q="CREATE DATABASE IF NOT EXISTS \`${dbname}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
            CREATE USER IF NOT EXISTS '${dbuser}'@'localhost' IDENTIFIED BY '${dbpass}';
            CREATE USER IF NOT EXISTS '${dbuser}'@'127.0.0.1' IDENTIFIED BY '${dbpass}';
            GRANT ALL PRIVILEGES ON \`${dbname}\`.* TO '${dbuser}'@'localhost';
            GRANT ALL PRIVILEGES ON \`${dbname}\`.* TO '${dbuser}'@'127.0.0.1';
            FLUSH PRIVILEGES;"
-  mysql --defaults-file=/etc/mysql/debian.cnf -e "$q" || mysql -u root -e "$q"
+  
+  if [[ -f /etc/mysql/debian.cnf ]]; then
+    mysql --defaults-file=/etc/mysql/debian.cnf -e "$q"
+  else
+    mysql -u root -e "$q"
+  fi
   log_success "Database '${dbname}' created"
 }
 
@@ -83,6 +153,11 @@ stack_mariadb_drop_db() {
            DROP USER IF EXISTS '${dbuser}'@'localhost';
            DROP USER IF EXISTS '${dbuser}'@'127.0.0.1';
            FLUSH PRIVILEGES;"
-  mysql --defaults-file=/etc/mysql/debian.cnf -e "$q" 2>/dev/null || mysql -u root -e "$q" 2>/dev/null || true
+  if [[ -f /etc/mysql/debian.cnf ]]; then
+    mysql --defaults-file=/etc/mysql/debian.cnf -e "$q" 2>/dev/null || true
+  else
+    mysql -u root -e "$q" 2>/dev/null || true
+  fi
   log_success "Database '${dbname}' dropped"
 }
+
