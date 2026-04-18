@@ -18,6 +18,7 @@ site_delete() {
   _frankenphp_reload
   [[ -n "${DB_NAME:-}" ]] && stack_mariadb_drop_db "${DB_NAME}" "${DB_USER:-}"
   rm -rf "/var/www/${domain}"
+  rm -f "/etc/cron.d/fwp-${domain//./-}"
   rm -f "/etc/fwp/sites/${domain}.conf"
   log_success "Site '${domain}' removed."
 }

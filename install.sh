@@ -8,7 +8,7 @@
 # ==============================================================================
 set -euo pipefail
 
-FWP_VERSION="0.2.0"
+FWP_VERSION="0.2.2"
 FWP_REPO_RAW="https://cdn.jsdelivr.net/gh/overdigo/fwp@main"
 FWP_HOME="/opt/fwp"
 FWP_BIN="/usr/local/bin/fwp"
@@ -78,7 +78,7 @@ install_base_deps() {
   log_step "Installing base dependencies..."
   export DEBIAN_FRONTEND=noninteractive
   apt-get update -qq || true
-  apt-get install -y -qq curl wget gnupg lsb-release debconf-utils ca-certificates git unzip tar ufw fail2ban logrotate >/dev/null 2>&1
+  apt-get install -y -qq curl wget gnupg lsb-release debconf-utils ca-certificates git unzip tar ufw fail2ban logrotate cron sudo >/dev/null 2>&1
 
   # Redis 8 repo
   curl -fsSL https://packages.redis.io/gpg | gpg --dearmor -o /usr/share/keyrings/redis-archive-keyring.gpg --yes

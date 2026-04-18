@@ -144,8 +144,8 @@ EOF
   log_step "Configuring Cron tasks..."
   sudo -u www-data /usr/local/bin/wp config set DISABLE_WP_CRON true --raw --type=constant --path="${webroot}" > /dev/null 2>&1
   
-  # Add real system cron (every 5 minutes)
-  (crontab -u www-data -l 2>/dev/null; echo "*/5 * * * * /usr/local/bin/wp cron event run --due-now --path=${webroot} > /dev/null 2>&1") | crontab -u www-data -
+  # Add real system cron (every 5 minutes) via /etc/cron.d for better management
+  echo "*/5 * * * * www-data /usr/local/bin/wp cron event run --due-now --path=${webroot} > /dev/null 2>&1" > "/etc/cron.d/fwp-${domain//./-}"
 
   _site_save_registry "${domain}" "${webroot}" \
     "${db_name}" "${db_user}" "${db_pass}" \
