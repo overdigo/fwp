@@ -12,10 +12,16 @@ wpcli_install() {
 
 wp_cli() {
   local path="${WP_PATH:-}"
+  export WP_CLI_CACHE_DIR="/var/www/.wp-cli/cache"
+  export WP_CLI_DISABLE_AUTO_CHECK_UPDATE=1
+  mkdir -p "${WP_CLI_CACHE_DIR}"
+  chown -R www-data:www-data /var/www/.wp-cli 2>/dev/null || true
+
   if [[ -n "${path}" ]]; then
-    ( cd "${path}" 2>/dev/null || true; sudo -u www-data env WP_CLI_DISABLE_AUTO_CHECK_UPDATE=1 "${WP_BIN}" --path="${path}" "$@" )
+    ( cd "${path}" 2>/dev/null || true; /usr/local/bin/wp --path="${path}" --allow-root "$@" )
+    chown -R www-data:www-data "${path}"
   else
-    ( cd /tmp && sudo -u www-data env WP_CLI_DISABLE_AUTO_CHECK_UPDATE=1 "${WP_BIN}" "$@" )
+    ( cd /tmp && /usr/local/bin/wp --allow-root "$@" )
   fi
 }
 

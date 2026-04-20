@@ -15,7 +15,7 @@ _fwp_completions() {
         done
         COMPREPLY=($(compgen -W "${sites[*]:-}" -- "${cur}"))
       elif [[ "${COMP_WORDS[2]}" == "create" ]]; then
-        COMPREPLY=($(compgen -W "--locale= --title= --admin-email= --admin-user= --skip-redis --skip-ssl" -- "${cur}"))
+        COMPREPLY=($(compgen -W "--locale= --title= --admin-email= --admin-user= --skip-redis --skip-ssl --worker --www --no-www --wpsc --wprocket --wpce --nocache --cache=" -- "${cur}"))
       fi ;;
     stack)
       COMPREPLY=($(compgen -W "status upgrade" -- "${cur}")) ;;

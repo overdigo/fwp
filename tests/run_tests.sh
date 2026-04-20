@@ -15,6 +15,14 @@ fi
 CMD="incus"
 command -v incus &>/dev/null || CMD="lxc"
 
+preserve=false
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --preserve|-p) preserve=true; shift ;;
+        *) echo "Unknown argument: $1"; exit 1 ;;
+    esac
+done
+
 targets=(
     "fwp-deb12|images:debian/12"
     "fwp-deb13|images:debian/13"
@@ -55,7 +63,7 @@ run_test_for_target() {
     # Execute the installation
     echo "[$name] Running install.sh..." >> "$logfile"
     $CMD exec "$name" -- sed -i 's/set -euo pipefail/set -exuo pipefail/' /opt/fwp-src/install.sh
-    if ! $CMD exec "$name" -- bash -c 'cd /opt/fwp-src && ./install.sh' >> "$logfile" 2>&1; then
+    if ! $CMD exec "$name" -- bash -c 'cd /opt/fwp-src && ./install.sh --mariadb' >> "$logfile" 2>&1; then
         echo "❌ [$name] install.sh failed! Check $logfile"
         tail -n 50 "$logfile"
         return 1
@@ -63,7 +71,7 @@ run_test_for_target() {
 
     # Test full site creation
     echo "[$name] Testing site creation..." >> "$logfile"
-    if ! $CMD exec "$name" -- bash -c 'fwp site create test.local --title="Test Site" --skip-ssl' >> "$logfile" 2>&1; then
+    if ! $CMD exec "$name" -- bash -c 'fwp site create test.local --title="Test Site" --skip-ssl --no-www' >> "$logfile" 2>&1; then
         echo "❌ [$name] fwp site create failed! Check $logfile"
         tail -n 50 "$logfile"
         return 1
@@ -96,11 +104,15 @@ for target_str in "${targets[@]}"; do
     fi
 done
 
-echo "=> Tearing down containers..."
-for target_str in "${targets[@]}"; do
-    IFS="|" read -r c_name c_image <<< "$target_str"
-    $CMD delete -f "$c_name" &>/dev/null || true
-done
+if [ "$preserve" = false ]; then
+    echo "=> Tearing down containers..."
+    for target_str in "${targets[@]}"; do
+        IFS="|" read -r c_name c_image <<< "$target_str"
+        $CMD delete -f "$c_name" &>/dev/null || true
+    done
+else
+    echo "=> Preserving containers for manual inspection."
+fi
 
 echo "=========================================="
 if [ $exit_code -eq 0 ]; then
