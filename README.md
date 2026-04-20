@@ -60,7 +60,9 @@ FrankenWP includes a standardized administration environment for root:
 
 ```bash
 # Site management
-sudo fwp site create example.com
+sudo fwp site create example.com              # Default (WP Super Cache)
+sudo fwp site create cf.com --cache=wpce      # WP Cloudflare Super Page Cache
+sudo fwp site create dev.local --cache=none   # No caching plugin
 sudo fwp site create dev.local --skip-ssl --locale=pt_BR --title="Dev Site"
 sudo fwp site list
 sudo fwp site info example.com
