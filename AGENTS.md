@@ -164,6 +164,23 @@ systemd override in `/etc/systemd/system/frankenphp.service.d/limits.conf`:
 
 ---
 
+## Security & Stability Patterns (v0.4.0)
+
+### 1. Bash Completion
+- **Never** modify `/etc/bash.bashrc` (global).
+- Configuration is strictly appended to `/root/.bashrc`.
+- Ensures shell security and avoids interference with non-root users.
+
+### 2. Configuration Permissions
+- All per-site Caddyfiles in `/etc/frankenphp/sites-available/` **must** have `644` permissions.
+- This allows the `www-data` user (which runs the FrankenPHP service) to read the configuration while keeping it owned by `root`.
+
+### 3. Directory Ownership
+- The `/var/www/` directory and its subfolders **must** be owned by `www-data:www-data`.
+- This prevents "Permission Denied" errors when FrankenPHP/Caddy attempts to create log files or manage site-specific directories.
+
+---
+
 ## Contributing
 
 1. Fork → branch (`feat/my-feature` or `fix/bug-name`)

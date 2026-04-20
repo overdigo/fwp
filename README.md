@@ -41,6 +41,20 @@ sudo fwp site create example.com
 | **Rate Limiting** | Anti-bruteforce for wp-login, XML-RPC block, API limits |
 | **Kernel tuning** | BBR, sysctl, open file limits |
 | **UFW + Fail2Ban** | Hardened rules |
+| **CLI Environment**| `bash-completion` + `nanorc` (advanced syntax highlighting) |
+| **Productivity**   | Global aliases (`fprl`, `fpre`, `ltr`, `ip4`, `ip6`) |
+
+## Admin Experience (v0.4.0+)
+
+FrankenWP includes a standardized administration environment for root:
+
+- **Enhanced Nano**: Pre-configured with line numbers, mouse support, and `scopatz/nanorc` for 150+ languages.
+- **Smart Completion**: Tab-completion enabled for all commands (root-only for security).
+- **Essential Aliases**:
+  - `fprl` / `fpre`: FrankenPHP reload / restart
+  - `ltr` / `lk`: List files by time (newest first) or size (largest first)
+  - `ip4` / `ip6`: Quickly check public IP addresses
+  - `l`, `ll`, `la`: Colorized, human-readable directory listings
 
 ## Commands
 
