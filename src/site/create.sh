@@ -3,7 +3,7 @@
 site_create() {
   local domain="" locale="${FWP_DEFAULT_LOCALE:-en_US}"
   local title="My WordPress Site" admin_user="admwp" admin_email=""
-  local skip_redis=false skip_ssl=false www_pref="" worker_mode=false
+  local skip_redis=false skip_ssl=false www_pref="" worker_mode=true
   local cache_plugin="wpsc"  # default: wp-super-cache
   local positional=()
   while [[ $# -gt 0 ]]; do
@@ -22,6 +22,7 @@ site_create() {
       --no-www)        www_pref="non-www";     shift ;;
       --skip-www-prompt) www_pref="none";      shift ;;
       --worker)        worker_mode=true;       shift ;;
+      --no-worker)     worker_mode=false;      shift ;;
       --cache=*)       cache_plugin="${1#*=}"; shift ;;
       --cache)         cache_plugin="$2";      shift 2 ;;
       --wpsc)          cache_plugin="wpsc";    shift ;;
@@ -102,7 +103,6 @@ site_create() {
 
   log_step "5/8 Configuring FrankenPHP (Caddyfile)..."
   _site_generate_caddyfile "${domain}" "${webroot}" "${skip_ssl}" "${www_pref}" "${worker_mode}" "${cache_plugin}"
-  _frankenphp_reload
 
   # Add to /etc/hosts (Loopback) for internal communications
   if ! grep -q " ${domain}$" /etc/hosts; then
@@ -132,25 +132,43 @@ site_create() {
     log_info "Creating worker.php bridge..."
     cat > "${webroot}/worker.php" << 'EOF'
 <?php
-// FrankenWP — WordPress Worker Bridge
+
 ignore_user_abort(true);
 
-// Bootstrap do WordPress feito UMA VEZ
-define('ABSPATH', __DIR__ . '/');
-define('WPINC', 'wp-includes');
+// Número máximo de requests antes de reiniciar o worker.
+// Ajuste via variável de ambiente: MAX_REQUESTS=1000
+// Use 0 para desativar o limite (não recomendado para WordPress).
+$maxRequests = (int)($_SERVER['MAX_REQUESTS'] ?? 500);
 
-// Loop de requests
-$handler = static function () {
-    // Carrega o WordPress normalmente
+// Handler executado a cada request.
+// O FrankenPHP reseta superglobais automaticamente antes de cada chamada.
+$handler = static function (): void {
+    // Carrega o ciclo completo do WordPress para este request.
+    // Necessário porque o WP usa estado global extensivo
+    // ($wp_filter, $wp_query, $wpdb, etc.) que não pode ser reutilizado
+    // com segurança entre requests.
     require __DIR__ . '/wp-blog-header.php';
 };
 
-// Loop principal — bloqueia até uma requisição chegar
+// Loop principal.
+// frankenphp_handle_request() bloqueia até uma requisição chegar,
+// executa o handler e retorna true. Retorna false ao encerrar.
+$requestCount = 0;
+
 while (frankenphp_handle_request($handler)) {
+    // Força liberação de ciclos de referência circulares entre requests.
+    // Essencial para plugins WordPress que criam referências circulares.
     gc_collect_cycles();
+
+    // Reinicia o worker após atingir o limite de requests.
+    // Previne acúmulo gradual de memória de plugins mal escritos.
+    if ($maxRequests && ++$requestCount >= $maxRequests) {
+        break;
+    }
 }
 EOF
     chown www-data:www-data "${webroot}/worker.php"
+    log_success "worker.php created (WordPress bootstrap fora do loop)"
   fi
 
   log_step "8/8 Enabling Redis Object Cache..."
@@ -171,7 +189,7 @@ EOF
   _site_save_registry "${domain}" "${webroot}" \
     "${db_name}" "${db_user}" "${db_pass}" "${db_prefix}" \
     "${admin_user}" "${admin_pass}" "${admin_email}" \
-    "${skip_redis}" "${skip_ssl}" "${worker_mode}" "${cache_plugin}"
+    "${skip_redis}" "${skip_ssl}" "${cache_plugin}" "${worker_mode}"
 
   if [[ "${is_dev:-false}" == "true" ]]; then
     log_step "Extra: Importing WordPress Theme Unit Test data..."
@@ -189,43 +207,52 @@ EOF
     log_success "Test data imported"
   fi
 
+  log_info "Reloading FrankenPHP to apply new site..."
+  _frankenphp_reload
+
   _site_print_summary "${domain}" "${admin_user}" "${admin_pass}" \
     "${admin_email}" "${db_name}" "${db_user}" "${db_pass}" "${skip_ssl}"
 
   log_info "Auditando Redirecionamentos, HSTS e TLS..."
-  local protocols=("http" "https")
+  local protocols=("http")
+  [[ "${skip_ssl}" == "false" ]] && protocols+=("https")
   local variants=("${domain}" "www.${domain}")
   
   echo -e "\n--- Auditoria de Redirecionamentos e HSTS ---"
   for proto in "${protocols[@]}"; do
+    local port=80; [[ "${proto}" == "https" ]] && port=443
     for var in "${variants[@]}"; do
       echo -n "  Testing ${proto}://${var} -> "
-      curl -4Ik "${proto}://${var}" --resolve "${var}:${proto#*://}:127.0.0.1" 2>/dev/null | \
+      curl -4Ik "${proto}://${var}" --resolve "${var}:${port}:127.0.0.1" 2>/dev/null | \
         grep -Ei "HTTP/|location:|strict-transport-security:|server:" | tr '\n' ' '
       echo ""
     done
   done
 
-  echo -e "\n--- Auditoria de TLS e SNI ---"
-  echo -n "  TLS 1.2 Handshake: "
-  echo | openssl s_client -connect 127.0.0.1:443 -servername "${domain}" -tls1_2 2>/dev/null | grep -Ei "Protocol  :|Cipher    :" | tr '\n' ' ' || echo "Falhou"
-  echo -e "\n"
-  
-  echo -n "  TLS 1.3 Handshake: "
-  echo | openssl s_client -connect 127.0.0.1:443 -servername "${domain}" -tls1_3 2>/dev/null | grep -Ei "Protocol  :|Cipher    :" | tr '\n' ' ' || echo "Falhou"
-  echo -e "\n"
+  if [[ "${skip_ssl}" == "false" ]]; then
+    echo -e "\n--- Auditoria de TLS e SNI ---"
+    echo -n "  TLS 1.2 Handshake: "
+    echo | openssl s_client -connect 127.0.0.1:443 -servername "${domain}" -tls1_2 2>/dev/null | grep -Ei "Protocol  :|Cipher    :" | tr '\n' ' ' || echo "Falhou"
+    echo -e "\n"
+    
+    echo -n "  TLS 1.3 Handshake: "
+    echo | openssl s_client -connect 127.0.0.1:443 -servername "${domain}" -tls1_3 2>/dev/null | grep -Ei "Protocol  :|Cipher    :" | tr '\n' ' ' || echo "Falhou"
+    echo -e "\n"
 
-  echo -n "  Teste SEM SNI (Deveria ser rejeitado): "
-  if echo | openssl s_client -connect 127.0.0.1:443 2>&1 | grep -Ei "alert|error" > /dev/null; then
-    echo "Sucesso (Conexão rejeitada conforme esperado)"
+    echo -n "  Teste SEM SNI (Deveria ser rejeitado): "
+    if echo | openssl s_client -connect 127.0.0.1:443 2>&1 | grep -Ei "alert|error" > /dev/null; then
+      echo "Sucesso (Conexão rejeitada conforme esperado)"
+    else
+      echo "Aviso: Servidor aceitou conexão sem SNI"
+    fi
   else
-    echo "Aviso: Servidor aceitou conexão sem SNI"
+    echo -e "\n[INFO] SSL ignorado (--skip-ssl). Pulando auditoria de TLS."
   fi
   echo -e "\n${GREEN}${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 }
 
 _site_generate_caddyfile() {
-  local domain="$1" webroot="$2" skip_ssl="$3" www_pref="${4:-non-www}" worker_mode="${5:-false}" cache_plugin="${6:-wpsc}"
+  local domain="$1" webroot="$2" skip_ssl="$3" www_pref="${4:-non-www}" worker_mode="${5:-true}" cache_plugin="${6:-wpsc}"
   local caddy_file="/etc/frankenphp/sites-available/${domain}.conf"
   local log_dir="/var/www/${domain}/logs"
   
@@ -535,6 +562,7 @@ WP_ADMIN_EMAIL="${9}"
 REDIS_ENABLED="$( [[ "${10}" == "false" ]] && echo "true" || echo "false" )"
 SSL_ENABLED="$( [[ "${11}" == "false" ]] && echo "true" || echo "false" )"
 CACHE_PLUGIN="${12:-wpsc}"
+WORKER_MODE="${13:-true}"
 CONF
   chmod 600 "/etc/fwp/sites/${1}.conf"
   log_success "Registry: /etc/fwp/sites/${1}.conf"
@@ -549,6 +577,7 @@ CONF
 
 DOMAIN="${1}"
 CACHE_PLUGIN="${12:-wpsc}"
+WORKER_MODE="${13:-true}"
 
 ## WordPress Admin
 WP_ADMIN_URL="https://${1}/wp-admin"

@@ -43,6 +43,13 @@ sudo fwp site create example.com
 | **UFW + Fail2Ban** | Hardened rules |
 | **CLI Environment**| `bash-completion` + `nanorc` (advanced syntax highlighting) |
 | **Productivity**   | Global aliases (`fprl`, `fpre`, `ltr`, `ip4`, `ip6`) |
+| **Auto XDP (Experimental)** | Optional high-performance eBPF firewall for DDoS protection |
+
+## What's new in v0.5.0
+
+- **Auto XDP (Experimental)**: Optional high-performance eBPF firewall for DDoS protection and automatic port whitelisting. Installed via `install.sh --autoxdp`.
+- **Systemd Resource Limits**: Added `fwp stack limits` command to enforce memory prioritization (`MemorySwapMax=0`) and CPU accounting using cgroups for FrankenPHP, MariaDB, and Redis.
+- **Improved Installation Workflow**: Fixes for worker.php timing and race conditions on site creation.
 
 ## Admin Experience (v0.4.0+)
 

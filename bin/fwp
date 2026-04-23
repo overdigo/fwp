@@ -12,7 +12,7 @@ for mod in log os utils banner; do
   source "${FWP_HOME}/src/core/${mod}.sh"
 done
 
-VERSION="0.3.0"
+VERSION="0.5.0"
 
 show_help() {
   echo -e "
@@ -36,6 +36,9 @@ ${BOLD}Site Commands:${NC}
 ${BOLD}Stack Commands:${NC}
   ${CYAN}fwp stack status${NC}           Services + kernel tuning status
   ${CYAN}fwp stack upgrade${NC}          Upgrade FrankenPHP to latest release
+  ${CYAN}fwp stack limits apply${NC}     Apply systemd cgroup limits
+  ${CYAN}fwp stack limits remove${NC}    Remove systemd cgroup limits
+  ${CYAN}fwp stack limits status${NC}    Show current systemd limits/accounting
 
 ${BOLD}Firewall Commands:${NC}
   ${CYAN}fwp firewall status${NC}        UFW + Fail2Ban status
@@ -79,12 +82,21 @@ cmd_site() {
 
 cmd_stack() {
   local sub="${1:-status}"; shift || true
-  for mod in frankenphp mariadb redis kernel; do
+  for mod in frankenphp mariadb redis kernel systemd-limits; do
     source "${FWP_HOME}/src/stack/${mod}.sh"
   done
   case "${sub}" in
     status)  stack_status ;;
     upgrade) stack_frankenphp_upgrade ;;
+    limits)
+      local act="${1:-status}"; shift || true
+      case "${act}" in
+        apply)  stack_systemd_limits_apply ;;
+        remove) stack_systemd_limits_remove ;;
+        status) stack_systemd_limits_status ;;
+        *) log_error "Unknown limits action: '${act}'. Use: apply, remove, status"; exit 1 ;;
+      esac
+      ;;
     *)       log_error "Unknown subcommand: '${sub}'"; exit 1 ;;
   esac
 }

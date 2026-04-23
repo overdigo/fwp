@@ -4,11 +4,11 @@
 # Usage:
 #   wget -qO fwp https://cdn.jsdelivr.net/gh/overdigo/fwp@main/install.sh
 #   sudo bash fwp
-# Supported: Debian 12/13 | Ubuntu 24.04 / 26.04
+# Supported: Debian 12/13 | Ubuntu 22.04 / 24.04 / 26.04
 # ==============================================================================
 set -euo pipefail
 
-FWP_VERSION="0.4.0"
+FWP_VERSION="0.5.0"
 FWP_REPO_RAW="https://cdn.jsdelivr.net/gh/overdigo/fwp@main"
 FWP_HOME="/opt/fwp"
 FWP_BIN="/usr/local/bin/fwp"
@@ -47,14 +47,14 @@ setup_dns() {
     mkdir -p /etc/systemd/resolved.conf.d
     cat > /etc/systemd/resolved.conf.d/fwp-dns.conf << EOF
 [Resolve]
-DNS=1.1.1.1 8.8.8.8
-FallbackDNS=1.0.0.1 8.8.4.4
+DNS=1.1.1.1 8.8.8.8 9.9.9.9
+FallbackDNS=1.0.0.1 8.8.4.4 149.112.112.112
 EOF
     systemctl restart systemd-resolved 2>/dev/null || true
   fi
   
   # Also force /etc/resolv.conf just in case (may fail in some containers, that's okay)
-  echo -e "nameserver 1.1.1.1\nnameserver 8.8.8.8" > /etc/resolv.conf 2>/dev/null || true
+  echo -e "nameserver 1.1.1.1\nnameserver 8.8.8.8\nnameserver 9.9.9.9" > /etc/resolv.conf 2>/dev/null || true
   log_success "DNS configured"
 }
 
@@ -73,11 +73,12 @@ detect_os() {
       esac ;;
     ubuntu)
       case "${OS_VERSION}" in
+        22.04*) OS_NAME="Ubuntu 22.04 LTS (Jammy)" ;;
         24.04*) OS_NAME="Ubuntu 24.04 LTS (Noble)" ;;
         25.10*|26.04*) OS_NAME="Ubuntu 26.04 LTS" ;;
-        *)     log_fatal "Unsupported Ubuntu ${OS_VERSION}. Supported: 24.04, 26.04" ;;
+        *)     log_fatal "Unsupported Ubuntu ${OS_VERSION}. Supported: 22.04, 24.04, 26.04" ;;
       esac ;;
-    *) log_fatal "Unsupported OS '${OS_ID}'. Supported: Debian 12/13, Ubuntu 24.04/26.04" ;;
+    *) log_fatal "Unsupported OS '${OS_ID}'. Supported: Debian 12/13, Ubuntu 22.04/24.04/26.04" ;;
   esac
   log_info "OS detected: ${OS_NAME}"
 }
@@ -126,11 +127,12 @@ EOF
   fi
   log_success "Bash completion enabled for root"
 
-  # Configurar Aliases Globais
-  log_step "Configuring global aliases..."
-  cat > /etc/profile.d/fwp_aliases.sh << 'EOF'
+  # Configurar Aliases
+  log_step "Configuring aliases..."
+  local ALIAS_FILE="/tmp/fwp_aliases"
+  cat > "${ALIAS_FILE}" << 'EOF'
+
 # --- FrankenWP Aliases ---
-alias fprl='systemctl reload frankenphp'
 alias fpre='systemctl restart frankenphp'
 alias fpst='systemctl status frankenphp'
 
@@ -152,17 +154,29 @@ alias ip='ip -c'
 
 # --- Utilitários ---
 alias systemctl='nice -n -15 systemctl'
-
 EOF
-  chmod +x /etc/profile.d/fwp_aliases.sh
-  log_success "Global aliases configured"
+
+  # Aplicar no .bashrc do root e do usuário (se invocado via sudo)
+  local TARGETS=("/root/.bashrc")
+  if [[ -n "${SUDO_USER:-}" ]] && [[ "${SUDO_USER}" != "root" ]]; then
+    local USER_HOME
+    USER_HOME=$(getent passwd "${SUDO_USER}" | cut -d: -f6)
+    [[ -f "${USER_HOME}/.bashrc" ]] && TARGETS+=("${USER_HOME}/.bashrc")
+  fi
+
+  for target in "${TARGETS[@]}"; do
+    if ! grep -q "FrankenWP Aliases" "${target}"; then
+      cat "${ALIAS_FILE}" >> "${target}"
+    fi
+  done
+  rm -f "${ALIAS_FILE}"
+  log_success "Aliases configured for root and ${SUDO_USER:-user}"
 
   # Configurações Adicionais do Nano
   log_step "Configuring nano settings..."
   cat > /etc/nanorc << 'EOF'
 set linenumbers
 set mouse
-set smooth
 set softwrap
 set tabsize 4
 set tabstospaces
@@ -275,17 +289,25 @@ install_redis() {
 _redis_optimize_config() {
   local conf="/etc/redis/redis.conf"
   local sys_ram_mb; sys_ram_mb=$(awk '/MemTotal/ {printf "%.0f", $2/1024}' /proc/meminfo)
-  local maxmem="128mb" io_threads="2"
-  if [ "$sys_ram_mb" -ge 7500 ]; then maxmem="512mb"; io_threads="4"
-  elif [ "$sys_ram_mb" -ge 3500 ]; then maxmem="384mb"; io_threads="3"
-  elif [ "$sys_ram_mb" -ge 1500 ]; then maxmem="256mb"; io_threads="2"
+  local maxmem="128mb" io_threads="1"
+  if [ "$sys_ram_mb" -ge 7500 ]; then maxmem="512mb"; io_threads="3"
+  elif [ "$sys_ram_mb" -ge 3500 ]; then maxmem="384mb"; io_threads="2"
+  elif [ "$sys_ram_mb" -ge 1500 ]; then maxmem="256mb"; io_threads="1"
   fi
   cat > "${conf}" << EOF
+# --- TCP (descomentado para trocar para TCP) ---
+# bind 127.0.0.1 ::1
+# port 6379
+# protected-mode yes
+# tcp-backlog 4096
+# tcp-keepalive 60
+#
+# --- Unix Socket ---
 port 0
 unixsocket /var/run/redis/redis-server.sock
 unixsocketperm 770
+# --- Common configs ---
 timeout 0
-tcp-keepalive 60
 daemonize yes
 supervised systemd
 pidfile /var/run/redis/redis-server.pid
@@ -293,11 +315,24 @@ loglevel warning
 logfile /var/log/redis/redis-server.log
 databases 16
 io-threads ${io_threads}
+io-threads-do-reads yes
 maxmemory ${maxmem}
 maxmemory-policy allkeys-lru
+maxmemory-samples 10
 appendonly no
 save ""
 activedefrag yes
+active-defrag-ignore-bytes 100mb
+active-defrag-threshold-lower 10
+active-defrag-threshold-upper 75
+active-defrag-cycle-min 1
+active-defrag-cycle-max 15
+activerehashing yes
+hz 10
+lazyfree-lazy-eviction yes
+lazyfree-lazy-expire yes
+lazyfree-lazy-server-del yes
+lazyfree-lazy-user-del yes
 EOF
   usermod -aG redis www-data 2>/dev/null || true
   systemctl restart redis-server 2>/dev/null || true
@@ -321,7 +356,7 @@ install_frankenphp() {
   if command -v frankenphp &>/dev/null; then
     log_warn "Already installed: $(frankenphp version 2>&1 | head -1)"; return 0
   fi
-  fwp_os_check_arch
+  detect_arch
   local url
   url=$(curl -sSL https://api.github.com/repos/dunglas/frankenphp/releases/latest \
     | grep "browser_download_url" \
@@ -395,12 +430,21 @@ apply_kernel_tuning() {
   stack_kernel_tune
 }
 
+install_autoxdp() {
+  if [[ "${FWP_AUTO_XDP:-false}" == "true" ]]; then
+    log_step "Installing Auto XDP (DDoS Protection & Port Whitelisting)..."
+    curl --proto '=https' --tlsv1.2 -sSfL https://raw.githubusercontent.com/Kookiejarz/Auto_XDP/refs/heads/main/setup_xdp.sh | bash -s -- --force
+    log_success "Auto XDP installed and active"
+  fi
+}
+
 setup_firewall() {
   log_step "Configuring firewall (WordOps-based rules)..."
   source "${FWP_HOME}/src/core/log.sh"
   source "${FWP_HOME}/src/core/os.sh"
   source "${FWP_HOME}/src/stack/firewall.sh"
   stack_firewall_setup
+  install_autoxdp
 }
 
 setup_services() {
@@ -460,6 +504,7 @@ main() {
       --mysql)     db_type="mysql" ;;
       --mariadb)   db_type="mariadb" ;;
       --db-version=*) db_version="${arg#*=}" ;;
+      --autoxdp)   autoxdp_choice="yes" ;;
     esac
   done
 
@@ -513,8 +558,19 @@ main() {
     esac
   fi
 
+  if [[ -z "${autoxdp_choice:-}" ]]; then
+    echo -e "\n${BOLD}DDoS Protection:${NC}"
+    echo -e "  Do you want to install Auto XDP? (High-performance eBPF firewall)"
+    read -p "  Install Auto XDP? [y/N]: " autoxdp_ans
+    case "${autoxdp_ans}" in
+      [Yy]* ) autoxdp_choice="yes" ;;
+      * ) autoxdp_choice="no" ;;
+    esac
+  fi
+
   export FWP_DB_TYPE="${db_type}"
   export FWP_DB_VERSION="${db_version}"
+  [[ "${autoxdp_choice}" == "yes" ]] && export FWP_AUTO_XDP="true" || export FWP_AUTO_XDP="false"
 
   install_base_deps
   install_mariadb

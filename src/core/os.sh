@@ -13,11 +13,12 @@ fwp_os_detect() {
       esac ;;
     ubuntu)
       case "${OS_VERSION}" in
+        22.04) export OS_NAME="Ubuntu 22.04 LTS (Jammy)" ;;
         24.04) export OS_NAME="Ubuntu 24.04 LTS (Noble)" ;;
         26.04) export OS_NAME="Ubuntu 26.04 LTS" ;;
-        *)     log_fatal "Unsupported Ubuntu ${OS_VERSION}. Supported: 24.04, 26.04" ;;
+        *)     log_fatal "Unsupported Ubuntu ${OS_VERSION}. Supported: 22.04, 24.04, 26.04" ;;
       esac ;;
-    *) log_fatal "Unsupported OS '${OS_ID}'. Supported: Debian 12/13, Ubuntu 24.04/26.04" ;;
+    *) log_fatal "Unsupported OS '${OS_ID}'. Supported: Debian 12/13, Ubuntu 22.04/24.04/26.04" ;;
   esac
 }
 fwp_os_pkg_update()    { DEBIAN_FRONTEND=noninteractive apt-get update -qq; }

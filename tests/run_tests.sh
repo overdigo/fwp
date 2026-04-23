@@ -24,9 +24,10 @@ while [[ $# -gt 0 ]]; do
 done
 
 targets=(
-    "fwp-deb12|images:debian/12"
-    "fwp-deb13|images:debian/13"
-    "fwp-ubu24|images:ubuntu/24.04"
+    "fwp-deb12|images:debian/12|1|1GB|wpsc"
+    "fwp-deb13|images:debian/13|2|2GB|wpce"
+    "fwp-ubu22|images:ubuntu/22.04|3|4GB|none"
+    "fwp-ubu24|images:ubuntu/24.04|4|8GB|wprocket"
 )
 
 declare -A pids
@@ -36,15 +37,18 @@ mkdir -p "$DIR/logs"
 run_test_for_target() {
     local name=$1
     local image=$2
+    local cpus=$3
+    local memory=$4
+    local cache=$5
     local logfile="$DIR/logs/fwp_test_${name}.log"
-    echo "[$name] Starting test with image $image..." > "$logfile"
+    echo "[$name] Starting test (Image: $image, CPU: $cpus, RAM: $memory, Cache: $cache)..." > "$logfile"
     
     # Ensure a clean slate
     $CMD delete -f "$name" &>/dev/null || true
 
-    # Launch container with nesting and privileges so sysctl and ufw have low-level access
-    echo "[$name] Launching container..." >> "$logfile"
-    if ! $CMD launch "$image" "$name" -c security.nesting=true -c security.privileged=true -c limits.cpu=4 -c limits.memory=8GB >> "$logfile" 2>&1; then
+    # Launch container with specific resources
+    echo "[$name] Launching container with $cpus CPU and $memory RAM..." >> "$logfile"
+    if ! $CMD launch "$image" "$name" -c security.nesting=true -c security.privileged=true -c limits.cpu="$cpus" -c limits.memory="$memory" >> "$logfile" 2>&1; then
         echo "❌ [$name] Launch failed! Logs dumped below:"
         cat "$logfile"
         return 1
@@ -69,9 +73,15 @@ run_test_for_target() {
         return 1
     fi
 
-    # Test full site creation
-    echo "[$name] Testing site creation..." >> "$logfile"
-    if ! $CMD exec "$name" -- bash -c 'fwp site create test.local --title="Test Site" --skip-ssl --no-www' >> "$logfile" 2>&1; then
+    # Determine local IP for nip.io domain
+    echo "[$name] Determining local IP for nip.io domain..." >> "$logfile"
+    local c_ip
+    c_ip=$($CMD exec "$name" -- ip -o -4 a | grep -v " lo " | awk '{print $4}' | cut -d'/' -f1 | head -n 1)
+    local nip_domain="${c_ip//./-}.nip.io"
+
+    # Test full site creation with specific cache plugin
+    echo "[$name] Testing site creation for $nip_domain with --cache=$cache..." >> "$logfile"
+    if ! $CMD exec "$name" -- bash -c "fwp site create $nip_domain --title='Test Site ($name)' --cache='$cache' --dev --no-www" >> "$logfile" 2>&1; then
         echo "❌ [$name] fwp site create failed! Check $logfile"
         tail -n 50 "$logfile"
         return 1
@@ -85,20 +95,20 @@ run_test_for_target() {
         return 1
     fi
 
-    echo "✅ [$name] All tests passed!"
+    echo "✅ [$name] All tests passed (CPU:$cpus RAM:$memory Cache:$cache)!"
     return 0
 }
 
 echo "=> Dispatching tests..."
 for target_str in "${targets[@]}"; do
-    IFS="|" read -r c_name c_image <<< "$target_str"
-    run_test_for_target "$c_name" "$c_image" &
+    IFS="|" read -r c_name c_image c_cpus c_mem c_cache <<< "$target_str"
+    run_test_for_target "$c_name" "$c_image" "$c_cpus" "$c_mem" "$c_cache" &
     pids[$c_name]=$!
 done
 
 # Collect exit codes
 for target_str in "${targets[@]}"; do
-    IFS="|" read -r c_name c_image <<< "$target_str"
+    IFS="|" read -r c_name c_image c_cpus c_mem c_cache <<< "$target_str"
     if ! wait "${pids[$c_name]}"; then
         exit_code=1
     fi

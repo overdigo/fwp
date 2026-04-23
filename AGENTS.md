@@ -164,7 +164,7 @@ systemd override in `/etc/systemd/system/frankenphp.service.d/limits.conf`:
 
 ---
 
-## Security & Stability Patterns (v0.4.0)
+## Security & Stability Patterns (v0.4.0+)
 
 ### 1. Bash Completion
 - **Never** modify `/etc/bash.bashrc` (global).
@@ -178,6 +178,15 @@ systemd override in `/etc/systemd/system/frankenphp.service.d/limits.conf`:
 ### 3. Directory Ownership
 - The `/var/www/` directory and its subfolders **must** be owned by `www-data:www-data`.
 - This prevents "Permission Denied" errors when FrankenPHP/Caddy attempts to create log files or manage site-specific directories.
+
+### 4. Systemd Resource Limits (v0.5.0)
+- The `fwp stack limits` module enforces memory prioritization (`MemorySwapMax=0` for Redis/DB) and CPU accounting using cgroups.
+- Drop-ins are placed in `/etc/systemd/system/*.service.d/` to survive package upgrades.
+
+### 5. Auto XDP Firewall (Experimental, v0.5.0)
+- High-performance eBPF firewall that drops DDoS traffic before the kernel networking stack.
+- Installed optionally via `install.sh --autoxdp` or the interactive menu.
+- Syncs automatically and runs seamlessly alongside UFW rules.
 
 ---
 
