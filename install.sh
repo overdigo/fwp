@@ -408,6 +408,7 @@ install_fwp_files() {
       "src/core/log.sh"   "src/core/os.sh"    "src/core/utils.sh" "src/core/banner.sh"
       "src/stack/frankenphp.sh" "src/stack/mariadb.sh" "src/stack/redis.sh"
       "src/stack/wpcli.sh"  "src/stack/kernel.sh"   "src/stack/firewall.sh"
+      "src/stack/systemd-limits.sh"
       "src/site/create.sh"  "src/site/delete.sh"    "src/site/enable.sh"
       "src/site/disable.sh" "src/site/list.sh"      "src/site/info.sh"
       "bin/fwp"
