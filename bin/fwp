@@ -46,6 +46,7 @@ ${BOLD}Firewall Commands:${NC}
   ${CYAN}fwp firewall deny <port>${NC}    Block a port
 
 ${BOLD}General:${NC}
+  ${CYAN}fwp update${NC}                 Update FrankenWP CLI to latest version
   ${CYAN}fwp version${NC}                Show version info
   ${CYAN}fwp help${NC}                   Show this help
 
@@ -112,6 +113,28 @@ cmd_firewall() {
   esac
 }
 
+cmd_update() {
+  log_step "Updating FrankenWP CLI to latest version from GitHub..."
+  local raw_url="https://cdn.jsdelivr.net/gh/overdigo/fwp@main"
+  local modules=(
+    "src/core/log.sh"   "src/core/os.sh"    "src/core/utils.sh" "src/core/banner.sh"
+    "src/stack/frankenphp.sh" "src/stack/mariadb.sh" "src/stack/redis.sh"
+    "src/stack/wpcli.sh"  "src/stack/kernel.sh"   "src/stack/firewall.sh"
+    "src/stack/systemd-limits.sh"
+    "src/site/create.sh"  "src/site/delete.sh"    "src/site/enable.sh"
+    "src/site/disable.sh" "src/site/list.sh"      "src/site/info.sh"
+    "templates/Caddyfile.tpl" "templates/frankenphp.service.tpl"
+    "completions/fwp.bash" "bin/fwp"
+  )
+  for file in "${modules[@]}"; do
+    mkdir -p "${FWP_HOME}/$(dirname "${file}")"
+    curl -sSL -o "${FWP_HOME}/${file}" "${raw_url}/${file}"
+  done
+  chmod +x "${FWP_HOME}/bin/fwp"
+  log_success "FrankenWP CLI updated successfully."
+  "${FWP_HOME}/bin/fwp" version
+}
+
 main() {
   [[ "${EUID}" -ne 0 ]] && log_fatal "Please run as root:  sudo fwp $*"
   local cmd="${1:-}"; shift || true
@@ -119,6 +142,7 @@ main() {
     site)              cmd_site "$@" ;;
     stack)             cmd_stack "$@" ;;
     firewall)          cmd_firewall "$@" ;;
+    update)            cmd_update ;;
     version|--version) cmd_version ;;
     help|--help|-h|"") show_help ;;
     *) log_error "Unknown command: '${cmd}'"; show_help; exit 1 ;;
